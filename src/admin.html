@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理者メニュー - LINE GAS AI</title>
+  <base target="_top">
+  <?!= HtmlService.createHtmlOutputFromFile("css").getContent(); ?>
+  <style>
+    /* 管理者メニュー固有のスタイル */
+    .admin-header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    .admin-header h1 {
+      font-size: 2.5rem;
+      border-bottom: none;
+      margin-bottom: 10px;
+    }
+    
+    .admin-header .subtitle {
+      color: var(--text-muted);
+      font-size: 1.1rem;
+    }
+    
+    .menu-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 25px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    
+    .menu-tile {
+      background: var(--bg-card);
+      border-radius: var(--radius-xl);
+      padding: 30px;
+      text-decoration: none;
+      color: var(--text-color);
+      transition: all 0.3s ease;
+      border: 2px solid transparent;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    
+    .menu-tile:hover {
+      transform: translateY(-5px);
+      border-color: var(--primary-color);
+      box-shadow: 0 10px 30px rgba(0, 212, 255, 0.2);
+    }
+    
+    .menu-tile .icon {
+      font-size: 4rem;
+      margin-bottom: 20px;
+      display: block;
+    }
+    
+    .menu-tile .title {
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: var(--primary-color);
+      margin-bottom: 15px;
+    }
+    
+    .menu-tile .description {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+    
+    .menu-tile .arrow {
+      margin-top: 20px;
+      font-size: 1.2rem;
+      color: var(--primary-color);
+      opacity: 0;
+      transform: translateX(-10px);
+      transition: all 0.3s ease;
+    }
+    
+    .menu-tile:hover .arrow {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    
+    /* 각 메뉴 타일에 따른 아이콘 색상 */
+    .menu-tile.log-monitor .icon {
+      color: #4ade80;
+    }
+    
+    .menu-tile.rag-manager .icon {
+      color: #fbbf24;
+    }
+    
+    .menu-tile.settings .icon {
+      color: #e94560;
+    }
+    
+    .admin-badge {
+      display: inline-block;
+      background: var(--danger-color);
+      color: white;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+    
+    /* アクセス制限メッセージ */
+    .access-denied {
+      text-align: center;
+      padding: 60px 20px;
+    }
+    
+    .access-denied .icon {
+      font-size: 5rem;
+      margin-bottom: 20px;
+    }
+    
+    .access-denied h2 {
+      color: var(--danger-color);
+      border: none;
+    }
+    
+    /* 반응형 */
+    @media (max-width: 768px) {
+      .menu-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .admin-header h1 {
+        font-size: 1.8rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="accessDenied" class="access-denied" style="display: none;">
+      <div class="icon">🚫</div>
+      <h2>アクセスが拒否されました</h2>
+      <p>この画面は管理者専用のページです。</p>
+      <p>URLパラメータに ?page=admin を付けてアクセスしてください。</p>
+    </div>
+    
+    <div id="adminContent" style="display: none;">
+      <a href="<?= getAppUrl() ?>" class="back-link">← チャット画面に戻る</a>
+      
+      <div class="admin-header">
+        <h1>⚙️ 管理者メニュー</h1>
+        <p class="subtitle">AI Chat 管理画面へようこそ</p>
+        <span class="admin-badge">ADMIN</span>
+      </div>
+      
+      <div class="menu-grid">
+        <!-- RAGマネージャー -->
+        <a href="javascript:void(0)" onclick="goToPage('rag')" class="menu-tile rag-manager">
+          <span class="icon">📚</span>
+          <div class="title">RAGマネージャー</div>
+          <div class="description">
+            AI Knowledge Baseの管理を行います。<br>
+            ドキュメントの追加・編集・削除ができます。
+          </div>
+          <div class="arrow">→ 開く</div>
+        </a>
+        
+        <!-- ログモニター -->
+        <a href="javascript:void(0)" onclick="goToPage('log')" class="menu-tile log-monitor">
+          <span class="icon">📊</span>
+          <div class="title">ログモニター</div>
+          <div class="description">
+            Botの動作ログをリアルタイムで監視・検索します。<br>
+            エラー情報の確認やデバッグに便利です。
+          </div>
+          <div class="arrow">→ 開く</div>
+        </a>
+        
+        <!-- プロンプトテンプレート設定 -->
+        <a href="javascript:void(0)" onclick="showPromptSettings()" class="menu-tile settings">
+          <span class="icon">📝</span>
+          <div class="title">プロンプト設定</div>
+          <div class="description">
+            AIのプロンプトテンプレートを管理します。<br>
+            システム全体の指示を設定できます。
+          </div>
+          <div class="arrow">→ 開く</div>
+        </a>
+        
+        <!-- 設定 -->
+        <a href="javascript:void(0)" onclick="goToPage('settings')" class="menu-tile settings">
+          <span class="icon">⚙️</span>
+          <div class="title">設定</div>
+          <div class="description">
+            Botの詳細設定を行います。<br>
+            システム設定やAPI設定を管理できます。
+          </div>
+          <div class="arrow">→ 開く</div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ローディングオーバーレイ -->
+  <div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="loading-spinner"></div>
+  </div>
+
+  <!-- プロンプト設定モーダル -->
+  <div class="modal-overlay" id="promptSettingsModal">
+    <div class="modal" style="max-width: 700px; max-height: 90vh; overflow-y: auto;">
+      <div class="modal-title">📝 プロンプトテンプレート設定</div>
+      <p style="color: var(--text-muted); margin-bottom: 20px;">
+        AIアシスタントの動作を定義するプロンプトを設定できます。
+      </p>
+      
+      <div id="promptLoading" style="text-align: center; padding: 20px;">
+        <span>読み込み中...</span>
+      </div>
+      
+      <div id="promptSettingsForm" style="display: none;">
+        <div class="form-group">
+          <label class="form-label">システムプロンプト<br><span style="font-weight:normal;color:#888;font-size:12px;">AIの基本的な役割やペルソナを定義</span></label>
+          <textarea id="adminSystemPrompt" class="form-textarea" rows="4" placeholder="あなたは誠実で効率的なAIアシスタントです。ユーザーの意図を正確に理解し、日本語で簡潔かつ明確に回答してください。"></textarea>
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label">応答ルール<br><span style="font-weight:normal;color:#888;font-size:12px;">具体的な応答のルール（箇条書き）</span></label>
+          <textarea id="adminResponseRules" class="form-textarea" rows="4" placeholder="1. 常に敬語を使用&#10;2. 質問には明確に回答&#10;3. 不明確な点は確認する"></textarea>
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label">禁止トピック<br><span style="font-weight:normal;color:#888;font-size:12px;">応答を避けるべきトピック（カンマ区切り）</span></label>
+          <input type="text" id="adminForbiddenTopics" class="form-input" placeholder="政治,宗教,機密情報">
+        </div>
+        
+        <div style="display: flex; gap: 10px; margin-top: 20px;">
+          <button class="modal-btn confirm" onclick="saveAdminPromptSettings()">💾 保存</button>
+          <button class="modal-btn cancel" onclick="closePromptSettingsModal()">キャンセル</button>
+        </div>
+      </div>
+      
+      <div id="promptError" style="display: none; color: var(--danger-color); padding: 10px; text-align: center;"></div>
+    </div>
+  </div>
+
+  <script>
+    // サーバーから渡されたadminフラグを使用（JavaScriptテンプレート変数を参照）
+    var serverAdminParam = '<?= adminParam ?>';
+    
+    // URLパラメータでアクセス制御
+    function checkAccess() {
+      // デバッグ用
+      console.log('Server admin param:', serverAdminParam);
+      console.log('URL params:', window.location.search);
+      
+      // パラメータをチェック
+      const searchParams = new URLSearchParams(window.location.search);
+      const urlAdminParam = searchParams.get('admin');
+      const urlPageParam = searchParams.get('page');
+      
+      console.log('URL admin param:', urlAdminParam);
+      console.log('URL page param:', urlPageParam);
+      
+      // サーバー側：adminParam='admin' 或者 URL：admin or page=admin
+      if (serverAdminParam === 'admin' || urlAdminParam === 'admin' || urlPageParam === 'admin') {
+        // アクセスが許可された場合
+        document.getElementById('accessDenied').style.display = 'none';
+        document.getElementById('adminContent').style.display = 'block';
+        console.log('Access GRANTED');
+      } else {
+        // アクセスが許可されていない場合
+        document.getElementById('accessDenied').style.display = 'block';
+        document.getElementById('adminContent').style.display = 'none';
+        console.log('Access DENIED');
+      }
+    }
+    
+    // ページ読み込み時にアクセス権限をチェック
+    window.onload = checkAccess;
+    
+    // プロンプト設定関連のJavaScript
+    function showPromptSettings() {
+      document.getElementById('promptSettingsModal').classList.add('active');
+      loadAdminPromptSettings();
+    }
+    
+    function closePromptSettingsModal() {
+      document.getElementById('promptSettingsModal').classList.remove('active');
+    }
+    
+    document.getElementById('promptSettingsModal').addEventListener('click', function(e) {
+      if (e.target === this) {
+        closePromptSettingsModal();
+      }
+    });
+    
+    function loadAdminPromptSettings() {
+      document.getElementById('promptLoading').style.display = 'block';
+      document.getElementById('promptSettingsForm').style.display = 'none';
+      document.getElementById('promptError').style.display = 'none';
+      
+      google.script.run.withSuccessHandler(function(result) {
+        document.getElementById('promptLoading').style.display = 'none';
+        
+        if (result.success) {
+          const settings = result.settings;
+          document.getElementById('adminSystemPrompt').value = settings.ADMIN_SYSTEM_PROMPT || '';
+          document.getElementById('adminResponseRules').value = settings.ADMIN_RESPONSE_RULES || '';
+          document.getElementById('adminForbiddenTopics').value = settings.ADMIN_FORBIDDEN_TOPICS || '';
+          document.getElementById('promptSettingsForm').style.display = 'block';
+        } else {
+          document.getElementById('promptError').textContent = '設定の読み込みに失敗しました: ' + (result.error || '不明なエラー');
+          document.getElementById('promptError').style.display = 'block';
+        }
+      }).withFailureHandler(function(error) {
+        document.getElementById('promptLoading').style.display = 'none';
+        document.getElementById('promptError').textContent = '通信エラー: ' + error.message;
+        document.getElementById('promptError').style.display = 'block';
+      }).getAdminPromptSettings();
+    }
+    
+    function saveAdminPromptSettings() {
+      showLoading(true);
+      
+      const settings = {
+        'ADMIN_SYSTEM_PROMPT': document.getElementById('adminSystemPrompt').value,
+        'ADMIN_RESPONSE_RULES': document.getElementById('adminResponseRules').value,
+        'ADMIN_FORBIDDEN_TOPICS': document.getElementById('adminForbiddenTopics').value
+      };
+      
+      const keys = Object.keys(settings);
+      let currentIndex = 0;
+      
+      function saveNext() {
+        if (currentIndex >= keys.length) {
+          showLoading(false);
+          alert('✅ 設定を保存しました！');
+          closePromptSettingsModal();
+          return;
+        }
+        
+        const key = keys[currentIndex];
+        const value = settings[key];
+        
+        google.script.run.withSuccessHandler(function(result) {
+          currentIndex++;
+          saveNext();
+        }).withFailureHandler(function(error) {
+          showLoading(false);
+          alert('❌ 設定の保存に失敗しました: ' + error.message);
+        }).setAdminPrompt(key, value);
+      }
+      
+      saveNext();
+    }
+    
+    // ページ遷移関数
+    function goToPage(page) {
+      console.log(window.location.href);
+      // URLを直接設定（iframe外への遷移）
+      window.top.location.href = '<?= getAppUrl() ?>?page=' + page;
+    }
+    
+  </script>
+</body>
+</html>

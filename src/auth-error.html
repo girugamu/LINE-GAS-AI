@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>アクセス拒否 | LINE GAS AI</title>
+  <base target="_top">
+  <?!= HtmlService.createHtmlOutputFromFile("css").getContent(); ?>
+  <style>
+    /* 認証エラー画面専用のスタイル */
+    .auth-error-container {
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      text-align: center;
+    }
+    
+    .auth-error-icon {
+      font-size: 5rem;
+      margin-bottom: 20px;
+      display: block;
+    }
+    
+    .auth-error-title {
+      color: var(--danger-color);
+      font-size: 2rem;
+      margin-bottom: 20px;
+      border: none;
+    }
+    
+    .auth-error-message {
+      color: var(--text-muted);
+      line-height: 1.8;
+      margin-bottom: 30px;
+    }
+    
+    .auth-user-info {
+      background: var(--bg-card);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      margin: 25px 0;
+      text-align: left;
+    }
+    
+    .auth-user-info label {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      display: block;
+      margin-bottom: 8px;
+    }
+    
+    .auth-user-info span {
+      color: var(--text-color);
+      font-size: 0.95rem;
+      word-break: break-all;
+    }
+    
+    .auth-error-message-detail {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      padding: 15px;
+      background: rgba(255, 107, 107, 0.1);
+      border-radius: var(--radius-md);
+      margin: 20px 0;
+    }
+    
+    .auth-note {
+      background: var(--bg-card);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      margin: 25px 0;
+      text-align: left;
+    }
+    
+    .auth-note strong {
+      color: #fbbf24;
+    }
+    
+    .auth-note code {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.9em;
+    }
+    
+    .auth-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 14px 28px;
+      border-radius: var(--radius-lg);
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.3s ease;
+      cursor: pointer;
+      border: none;
+      font-size: 1rem;
+      margin: 10px 5px;
+    }
+    
+    .auth-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+    }
+    
+    .auth-btn-switch {
+      background: #4285f4;
+      color: white;
+    }
+    
+    .auth-btn-switch:hover {
+      background: #3367d6;
+    }
+    
+    .auth-btn-login {
+      background: var(--primary-color);
+      color: var(--bg-main);
+    }
+    
+    .auth-btn-login:hover {
+      background: #00b8e6;
+    }
+    
+    .auth-btn-hint {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-top: 10px;
+    }
+    
+    .auth-actions {
+      margin-top: 30px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="auth-error-container">
+      <div class="auth-error-icon"><?= authResult.isBlocked ? '⛔' : '🚫' ?></div>
+      <h1 class="auth-error-title"><?= authResult.isBlocked ? 'アクセスがブロックされました' : 'アクセスが拒否されました' ?></h1>
+      
+      <p class="auth-error-message">
+        <? if (authResult.isBlocked) { ?>
+        このサービスへのアクセスはブロックされています。<br>
+        詳細については管理者にお問い合わせください。
+        <? } else { ?>
+        この画面は管理者専用のページです。<br>
+        アクセス権限がありません。
+        <? } ?>
+      </p>
+      
+      <div class="auth-user-info">
+        <label>ログインユーザー</label>
+        <span id="userEmail"><?= authResult.email ? authResult.email : '取得できませんでした' ?></span>
+      </div>
+      
+      <div class="auth-error-message-detail">
+        <?= authResult.message ?>
+      </div>
+      
+      <div class="auth-note">
+        <? if (authResult.isBlocked) { ?>
+        <strong>⛔ アクセスがブロックされています</strong>
+        <? } else { ?>
+        <strong>⚠️ 管理者としてアクセスする場合</strong><br><br>
+        ScriptPropertiesの <code>ADMIN_LIST</code> にメールアドレスを追加してください。<br><br>
+        <strong>設定例:</strong><br>
+        <code>ADMIN_LIST = admin@example.com, manager@example.com</code>
+        <? } ?>
+      </div>
+      
+      <div class="auth-actions">
+        <? if (authResult.email) { ?>
+        <!-- ログイン済みだが管理者リストにない場合 -->
+        <a href="https://accounts.google.com/Logout?continue=https://appengine.google.com/_ah/logout?continue%3D<?= encodeURIComponent(getAppUrl()) ?>" 
+           class="auth-btn auth-btn-switch">
+          🔄 アカウントを切り替え
+        </a>
+        <p class="auth-btn-hint">
+          別のGoogleアカウントでログインし直す場合は上記をクリックしてください。
+        </p>
+        <? } else { ?>
+        <!-- 未ログインの場合 -->
+        <a href="https://accounts.google.com/ServiceLogin?passive=true&service=ah&continue=<?= encodeURIComponent(getAppUrl()) ?>" 
+           class="auth-btn auth-btn-login"
+           target="_blank">
+          🔐 Googleにログイン
+        </a>
+        <p class="auth-btn-hint">
+          Googleアカウントでログインしてから再度アクセスしてください。
+        </p>
+        <? } ?>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
