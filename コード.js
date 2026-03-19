@@ -3700,7 +3700,7 @@ function rerankResults(query, initialResults) {
     return initialResults;
   }
 
-  logTrace("[RERANK] リランキング開始 - 候補数:", initialResults.length);
+  logTrace("[RERANK] リランキング開始 - 候補数:", initialResults.length, "- 使用モデル:", rerankModel);
 
   try {
     // 上位N件のみリランキング対象
@@ -3717,8 +3717,9 @@ function rerankResults(query, initialResults) {
       { role: "user", content: rankingPrompt }
     ];
 
-    logTrace("[RERANK] LLMに順位付けを依頼中...");
-    const response = callChatGPT(messages, 0.3);
+    logTrace("[RERANK] LLMに順位付けを依頼中... モデル:", rerankModel);
+    // パラメータで指定されたモデルでリランキングAPIを呼び出す
+    const response = callChatGPTRerank(messages, 0.3, rerankModel);
 
     // レスポンスからスコアをパース
     const scores = parseRerankResponse(response, candidates.length);
@@ -4033,6 +4034,54 @@ function fetchRelevantChunks(queryText, maxCandidates = 50) {
 // ================================
 //  17. ChatGPT API 呼び出し
 // ================================
+
+/**
+ * リランキング用ChatGPT APIを呼び出し
+ * 指定されたモデルでAPIリクエストを実行
+ * @param {Array} messages - メッセージ配列
+ * @param {number} temperature - 温度パラメータ
+ * @param {string} model - 使用するモデル
+ * @returns {string} AIの応答テキスト
+ */
+function callChatGPTRerank(messages, temperature, model) {
+  try {
+    const payload = {
+      model: model || GPT_MODEL,
+      messages: messages,
+      temperature: temperature
+    };
+
+    logTrace("[RERANK:API] リクエスト送信中... モデル:", payload.model);
+
+    const response = UrlFetchApp.fetch(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "post",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + OPENAI_API_KEY
+        },
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: false
+      }
+    );
+
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+
+    if (responseCode !== 200) {
+      logError("[RERANK:API] OpenAI API エラー: ステータスコード " + responseCode, responseText);
+      return "";
+    }
+
+    const json = JSON.parse(responseText);
+    return json.choices[0].message.content.trim();
+
+  } catch (error) {
+    logError("[RERANK:API] エラー:", error);
+    return "";
+  }
+}
 
 /**
  * OpenAI ChatGPT APIを呼び出して応答を取得
