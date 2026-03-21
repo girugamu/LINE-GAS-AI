@@ -1394,7 +1394,20 @@ function checkChatUserAuth() {
     
     // メールアドレスを取得できない場合はアクセスを許可（エラー画面への遷移不要）
     if (!userEmail) {
-      logTrace('[CHAT_AUTH] メールアドレスを取得できませんでした（アクセス許可）');
+      logTrace('[CHAT_AUTH] メールアドレスを取得できませんでした');
+      
+      // DEV_MODEが有効な場合は管理者として扱う
+      if (isDevModeEnabled()) {
+        logInfo('[CHAT_AUTH] DEV_MODE有効（メールアドレス未取得）: 管理者アクセス許可');
+        return {
+          isBlocked: false,
+          isAdmin: true,
+          isDevMode: true,
+          email: '',
+          message: '開発者モード: DEV_MODEが有効（メールアドレス未取得）'
+        };
+      }
+      
       return {
         isBlocked: false,
         isAdmin: false,
