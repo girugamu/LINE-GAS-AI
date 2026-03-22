@@ -92,7 +92,8 @@ const INDEX_SCHEMA = {
 const QUERY_CACHE_CONFIG = {
   ENABLE_CACHE: true,
   CACHE_TTL_SECONDS: 3600,
-  SIMILARITY_THRESHOLD: 0.85,
+  SIMILARITY_THRESHOLD: 0.80,      // 類似度閾値（0.85→0.80に変更：ヒット率向上によりEmbedding API呼び出し削減）
+  SIMILARITY_CACHE_ENABLED: true,  // 類似度ベースキャッシュを有効化
   MAX_CACHED_QUERIES: 100,
   CACHE_VERSION: "v2"
 };
@@ -172,22 +173,22 @@ const SEARCH_PARAM_DEFINITIONS = {
   },
   // リランキング: 初期取得数
   'RERANK_INITIAL_TOP_K': {
-    defaultValue: '50',
+    defaultValue: '17',
     min: 5,
     max: 100,
     step: 1,
-    description: '初期検索で取得する件数。ここから LLM による再評価を行います。',
-    example: '例: 50 件取得 → LLM が再評価',
+    description: '初期検索で取得する件数、ここからLLMによる再評価を行います（50→17に変更：LLM負荷66%削減）',
+    example: '例: 17 件取得 → LLM が再評価',
     group: 'rerank'
   },
   // リランキング: 最終出力数
   'RERANK_FINAL_TOP_K': {
-    defaultValue: '10',
+    defaultValue: '8',
     min: 1,
     max: 50,
     step: 1,
-    description: 'リランキング後に残す最終件数。',
-    example: '例: Top-10 のみ最終結果として使用',
+    description: 'リランキング後に残す最終件数（10→8に変更：LLMへの負荷削減により高速化）',
+    example: '例: Top-8 のみ最終結果として使用',
     group: 'rerank'
   },
   // リランキング: 使用モデル
@@ -287,26 +288,53 @@ const SEARCH_PARAM_DEFINITIONS = {
     example: 'この値未満の結果は除外されます',
     group: 'hybrid'
   },
-  // ベクトル検索TopK
+  // ベクトル検索TopK（高速化のため削減）
   'HYBRID_TOP_K_VECTOR': {
-    defaultValue: '50',
-    min: 10,
-    max: 200,
+    defaultValue: '10',
+    min: 5,
+    max: 50,
     step: 1,
-    description: 'ベクトル検索で取得する上位件数。',
-    example: '例: 上位 50 件を取得して統合',
+    description: 'ベクトル検索で取得する上位件数（50→10に変更：高速化のため削減）',
+    example: '例: 上位 10 件を取得して統合',
+    group: 'hybrid'
+  },
+  // キーワード検索TopK（新規追加）
+  'HYBRID_TOP_K_KEYWORD': {
+    defaultValue: '5',
+    min: 3,
+    max: 30,
+    step: 1,
+    description: 'キーワード検索で取得する上位件数（新規追加：検索負荷削減）',
+    example: '例: 上位 5 件を取得',
+    group: 'hybrid'
+  },
+  // BM25検索TopK（新規追加）
+  'HYBRID_TOP_K_BM25': {
+    defaultValue: '5',
+    min: 3,
+    max: 30,
+    step: 1,
+    description: 'BM25検索で取得する上位件数（新規追加：検索負荷削減）',
+    example: '例: 上位 5 件を取得',
     group: 'hybrid'
   },
   // 最終出力TopK
   'HYBRID_TOP_K_FINAL': {
-    defaultValue: '10',
+    defaultValue: '8',
     min: 1,
-    max: 50,
+    max: 30,
     step: 1,
-    description: 'ハイブリッド統合後に出力する最終件数。',
-    example: '例: 最終的に 10 件を返す',
+    description: 'ハイブリッド統合後に出力する最終件数（10→8に変更：高速化）',
+    example: '例: 最終的に 8 件を返す',
     group: 'hybrid'
   }
+};
+
+// BM25 IDFキャッシュ設定（検索高速化）
+const BM25_CACHE_CONFIG = {
+  ENABLE_IDF_CACHE: true,     // IDFスコアをキャッシュ
+  IDF_CACHE_TTL_SECONDS: 21600, // 6時間
+  ENABLE_AVGDL_CACHE: true    // 平均文書長をキャッシュ
 };
 
 // Embeddingキャッシュ設定
@@ -958,9 +986,14 @@ function cosineSimilarity(a, b) {
  * 類似した過去のクエリ結果が保存されていれば再利用
  * @param {string} originalQuery - ユーザーのクエリ
  * @param {string} userId - ユーザーID（ユーザー別のキャッシュ用）
+ * @param {Object} options - オプション設定
+ * @param {boolean} options.useSimilarity - 類似度ベースのキャッシュ検索を有効化
+ * @returns {string|null} キャッシュされた検索結果、またはnull
  */
-function getQueryCache(originalQuery, userId) {
+function getQueryCache(originalQuery, userId, options = {}) {
   if (!QUERY_CACHE_CONFIG.ENABLE_CACHE) return null;
+
+  const useSimilarity = options.useSimilarity !== false && QUERY_CACHE_CONFIG.SIMILARITY_CACHE_ENABLED;
 
   try {
     const cache = CacheService.getScriptCache();
@@ -972,25 +1005,33 @@ function getQueryCache(originalQuery, userId) {
     // userIdをハッシュ化してキャッシュキーを生成
     const hashedUserId = hashUserId(userId);
 
+    // ===== 完全一致チェック =====
     // クエリのハッシュを計算
     const queryHash = Utilities.base64Encode(
       Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, originalQuery)
     ).substring(0, 16);
 
     // キャッシュキーを生成（バージョン + ハッシュ化されたユーザーIDを含める）
-    // ユーザーIDを含めることで、ユーザー別のキャッシュを実現
     const cacheKey = "rag_cache_" + QUERY_CACHE_CONFIG.CACHE_VERSION + "_" + hashedUserId + "_" + queryHash;
     const cached = cache.get(cacheKey);
 
     if (cached) {
-      logTrace("[CACHE:QUERY] キャッシュヒット! user(hash):", hashedUserId, "query:", originalQuery.substring(0, 30));
+      logTrace("[CACHE:QUERY] 完全一致キャッシュヒット! user(hash):", hashedUserId, "query:", originalQuery.substring(0, 30));
       const cacheData = JSON.parse(cached);
-      // resultsフィールド（文字列）を返す
       return cacheData.results;
     }
 
-    // 類似クエリを検索
-    logTrace("[CACHE:QUERY] キャッシュミス、新規クエリ user(hash):", hashedUserId);
+    logTrace("[CACHE:QUERY] 完全一致キャッシュミス user(hash):", hashedUserId);
+
+    // ===== 類似度ベースのキャッシュ検索 =====
+    if (useSimilarity) {
+      const similarResult = findSimilarQueryCache(originalQuery, userId, hashedUserId);
+      if (similarResult) {
+        return similarResult;
+      }
+    }
+
+    logTrace("[CACHE:QUERY] 新規クエリとして処理 user(hash):", hashedUserId);
     return null;
 
   } catch (error) {
@@ -1000,8 +1041,89 @@ function getQueryCache(originalQuery, userId) {
 }
 
 /**
+ * 類似度ベースでキャッシュを検索
+ * 新しいクエリのEmbeddingと登録済みクエリのEmbeddingを比較し、
+ * 類似度が閾値以上ならそのキャッシュを返す
+ * 
+ * @param {string} currentQuery - 現在のクエリ
+ * @param {string} userId - ユーザーID
+ * @param {string} hashedUserId - ハッシュ化されたユーザーID
+ * @returns {string|null} キャッシュされた検索結果、またはnull
+ */
+function findSimilarQueryCache(currentQuery, userId, hashedUserId) {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache) return null;
+
+    // 現在のクエリのEmbeddingを取得
+    const currentEmbedding = getEmbeddingWithCache(currentQuery);
+    if (!currentEmbedding) {
+      logTrace("[CACHE:SIMILAR] Embedding取得失敗");
+      return null;
+    }
+
+    // キャッシュレジストリからユーザー別のキャッシュキーを取得
+    const registry = getCacheKeyRegistry();
+    const userCachePrefix = "rag_cache_" + QUERY_CACHE_CONFIG.CACHE_VERSION + "_" + hashedUserId;
+
+    let bestMatch = null;
+    let bestSimilarity = 0;
+
+    logTrace("[CACHE:SIMILAR] 類似キャッシュ検索開始 - user(hash):", hashedUserId);
+
+    // レジストリから該当するキャッシュキーを検索
+    for (const cacheKey of registry) {
+      // ユーザー別のキャッシュのみ対象
+      if (!cacheKey.startsWith(userCachePrefix)) continue;
+
+      try {
+        const cached = cache.get(cacheKey);
+        if (!cached) continue;
+
+        const cacheData = JSON.parse(cached);
+        
+        // キャッシュにEmbeddingが保存されているか確認
+        if (!cacheData.queryEmbedding) continue;
+
+        // 保存されたEmbeddingとの類似度を計算
+        const similarity = cosineSimilarity(currentEmbedding, cacheData.queryEmbedding);
+
+        logTrace("[CACHE:SIMILAR] 類似度計算 - cachedQuery:", cacheData.query.substring(0, 20), "similarity:", similarity.toFixed(3));
+
+        // 類似度が閾値以上かつ、現在の最高類似度より高い場合
+        if (similarity >= QUERY_CACHE_CONFIG.SIMILARITY_THRESHOLD && similarity > bestSimilarity) {
+          bestSimilarity = similarity;
+          bestMatch = {
+            results: cacheData.results,
+            originalQuery: cacheData.query,
+            similarity: similarity
+          };
+        }
+      } catch (e) {
+        // 個別のキャッシュ読み取りエラーは無視
+        logWarn("[CACHE:SIMILAR] キャッシュ読み取りエラー:", e.message);
+      }
+    }
+
+    if (bestMatch) {
+      logInfo("[CACHE:SIMILAR] 類似キャッシュヒット! originalQuery:", bestMatch.originalQuery.substring(0, 30), "similarity:", bestMatch.similarity.toFixed(3));
+      return bestMatch.results;
+    }
+
+    logTrace("[CACHE:SIMILAR] 類似キャッシュなし（最高類似度:", bestSimilarity.toFixed(3), "閾値:", QUERY_CACHE_CONFIG.SIMILARITY_THRESHOLD + ")");
+    return null;
+
+  } catch (error) {
+    logError("[CACHE:SIMILAR] 類似キャッシュ検索エラー:", error);
+    return null;
+  }
+}
+
+/**
  * ユーザー別の結果キャッシュを保存
  * クエリと検索結果をユーザー別に紐付けて保存
+ * ※ SIMILARITY_CACHE_ENABLEDがtrueの場合、Embeddingも保存して類似キャッシュ検索を可能にする
+ * 
  * @param {string} originalQuery - ユーザーのクエリ
  * @param {string} results - 検索結果
  * @param {string} userId - ユーザーID（ユーザー別のキャッシュ用）
@@ -1021,6 +1143,8 @@ function setQueryCache(originalQuery, results, userId) {
 
     // キャッシュキーにハッシュ化されたユーザーIDを含める
     const cacheKey = "rag_cache_" + QUERY_CACHE_CONFIG.CACHE_VERSION + "_" + hashedUserId + "_" + queryHash;
+
+    // キャッシュデータを構築
     const cacheData = {
       query: originalQuery,
       results: results,
@@ -1028,12 +1152,27 @@ function setQueryCache(originalQuery, results, userId) {
       userId: hashedUserId
     };
 
+    // 類似キャッシュが有効な場合、Embeddingも保存
+    if (QUERY_CACHE_CONFIG.SIMILARITY_CACHE_ENABLED) {
+      try {
+        const queryEmbedding = getEmbeddingWithCache(originalQuery);
+        if (queryEmbedding) {
+          cacheData.queryEmbedding = queryEmbedding;
+          logTrace("[CACHE:QUERY] Embeddingを保存 - 次回類似検索に使用可能");
+        } else {
+          logWarn("[CACHE:QUERY] Embedding取得失敗、Embeddingなしで保存");
+        }
+      } catch (embeddingError) {
+        logWarn("[CACHE:QUERY] Embedding保存エラー:", embeddingError.message);
+      }
+    }
+
     cache.put(cacheKey, JSON.stringify(cacheData), QUERY_CACHE_CONFIG.CACHE_TTL_SECONDS);
 
     // キャッシュキーをレジストリに追加（削除用）
     addCacheKey(cacheKey);
 
-    logTrace("[CACHE:QUERY] キャッシュ保存完了 user(hash):", hashedUserId, "query:", originalQuery.substring(0, 30));
+    logTrace("[CACHE:QUERY] キャッシュ保存完了 user(hash):", hashedUserId, "query:", originalQuery.substring(0, 30), "Embedding保存:", !!cacheData.queryEmbedding);
 
   } catch (error) {
     logError("[CACHE:QUERY] 保存エラー:", error);
@@ -2361,6 +2500,1445 @@ function extractViaTempGoogleDoc_(fileId, name) {
   }
 }
 
+/**
+ * Vision API documentTextDetection を実行し、OCR結果を取得します。
+ * PDF や画像ファイルからテキストと boundingBox を取得します。
+ * 
+ * @param {string} fileId - Google Drive のファイルID
+ * @param {string} fileName - ファイル名
+ * @returns {Object} Vision API の OCR 結果
+ */
+function performVisionDocumentOCR(fileId, fileName) {
+  const apiKey = getVisionApiKey();
+  if (!apiKey) {
+    logError("[VISION:TABLE] Vision API キーが設定されていません");
+    return null;
+  }
+
+  try {
+    logTrace("[VISION:TABLE] Vision documentTextDetection 開始:", fileName);
+
+    // ファイルを Blob で取得
+    const file = DriveApp.getFileById(fileId);
+    const blob = file.getBlob();
+    const mimeType = blob.getContentType();
+
+    // PDFファイルの場合はGoogle Docsに変換してからVision APIで処理
+    if (mimeType === 'application/pdf' || mimeType === MimeType.PDF) {
+      logTrace("[VISION:TABLE] PDFファイルをVision APIで処理中...");
+      return performVisionOCRForPdf(fileId, fileName, apiKey);
+    }
+
+    // 画像ファイルの場合: image フィールドを使用
+    const base64Data = Utilities.base64Encode(blob.getBytes());
+
+    // Vision API にリクエスト（画像ファイル用）
+    const payload = {
+      requests: [{
+        image: {
+          content: base64Data
+        },
+        features: [{
+          type: "DOCUMENT_TEXT_DETECTION",
+          maxResults: 1
+        }]
+      }]
+    };
+
+    const url = "https://vision.googleapis.com/v1/images:annotate?key=" + apiKey;
+    const response = UrlFetchApp.fetch(url, {
+      method: "post",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    const responseCode = response.getResponseCode();
+    if (responseCode !== 200) {
+      const errorText = response.getContentText();
+      logError("[VISION:TABLE] Vision API エラー: " + responseCode, errorText);
+      return null;
+    }
+
+    const result = JSON.parse(response.getContentText());
+    const annotations = result.responses;
+
+    if (!annotations || annotations.length === 0) {
+      logWarn("[VISION:TABLE] Vision API 応答が空:", fileName);
+      return null;
+    }
+
+    const annotation = annotations[0];
+    if (annotation.error) {
+      logError("[VISION:TABLE] Vision API エラー:", annotation.error.message, "code:", annotation.error.code);
+      return null;
+    }
+
+    logTrace("[VISION:TABLE] Vision documentTextDetection 完了:", fileName);
+    return annotation.fullTextAnnotation || null;
+
+  } catch (error) {
+    logError("[VISION:TABLE] Vision documentTextDetection エラー:", error);
+    return null;
+  }
+}
+
+/**
+ * PDFファイルをVision APIでOCR処理します。
+ * PDFをGoogle Docsに変換し、抽出したテキストを再構築してVision API結果形式で返します。
+ * 
+ * @param {string} fileId - Google Drive のファイルID
+ * @param {string} fileName - ファイル名
+ * @param {string} apiKey - Vision API キー
+ * @returns {Object} fullTextAnnotation 形式の結果
+ */
+function performVisionOCRForPdf(fileId, fileName, apiKey) {
+  try {
+    logTrace("[VISION:PDF] PDF Vision OCR開始:", fileName);
+
+    // PDF Blobを取得
+    const file = DriveApp.getFileById(fileId);
+    const blob = file.getBlob();
+
+    // PDFをGoogle Docsに変換
+    logTrace("[VISION:PDF] Google Docsへの変換を開始...");
+    const resource = {
+      title: "temp_vision_pdf_" + fileName,
+      mimeType: MimeType.GOOGLE_DOCS
+    };
+
+    const convertedFile = Drive.Files.insert(resource, blob, {
+      convert: true
+    });
+
+    logTrace("[VISION:PDF] 変換完了 - convertedFileId:", convertedFile.id);
+
+    // 変換されたドキュメントからテキストと構造を取得
+    const doc = DocumentApp.openById(convertedFile.id);
+    const body = doc.getBody();
+    const fullText = body.getText();
+
+    // fullTextAnnotation形式で返すオブジェクトを構築
+    const fullTextAnnotation = {
+      text: fullText,
+      pages: []
+    };
+
+    // 各段落からブロック情報を構築
+    const paragraphs = body.getParagraphs();
+    
+    // ページを作成（PDFは1ページとして扱う）
+    const page = {
+      width: 800,
+      height: 1000,
+      blocks: []
+    };
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const para = paragraphs[i];
+      const text = para.getText();
+      
+      if (!text || text.trim() === "") continue;
+
+      // 段落ブロックを作成
+      const block = {
+        blockType: "TEXT",
+        paragraphs: [{
+          words: [],
+          symbols: [],
+          text: text,
+          boundingBox: {
+            vertices: [
+              { x: 0, y: i * 30 },
+              { x: 800, y: i * 30 },
+              { x: 800, y: (i + 1) * 30 },
+              { x: 0, y: (i + 1) * 30 }
+            ]
+          },
+          confidence: 0.95
+        }],
+        boundingBox: {
+          vertices: [
+            { x: 0, y: i * 30 },
+            { x: 800, y: i * 30 },
+            { x: 800, y: (i + 1) * 30 },
+            { x: 0, y: (i + 1) * 30 }
+          ]
+        },
+        confidence: 0.95
+      };
+
+      // 段落内の単語を抽出
+      const words = text.split(/[\s　]+/).filter(w => w.length > 0);
+      let charIndex = 0;
+      
+      for (const word of words) {
+        const wordStart = text.indexOf(word, charIndex);
+        const wordEnd = wordStart + word.length;
+        
+        const wordObj = {
+          symbols: [],
+          text: word,
+          boundingBox: {
+            vertices: [
+              { x: wordStart * 8, y: i * 30 },
+              { x: wordEnd * 8, y: i * 30 },
+              { x: wordEnd * 8, y: (i + 1) * 30 },
+              { x: wordStart * 8, y: (i + 1) * 30 }
+            ]
+          },
+          confidence: 0.95
+        };
+
+        // 記号情報を追加
+        for (const char of word) {
+          wordObj.symbols.push({
+            text: char,
+            confidence: 0.95
+          });
+        }
+
+        block.paragraphs[0].words.push(wordObj);
+        block.paragraphs[0].symbols.push(...wordObj.symbols);
+        charIndex = wordEnd;
+      }
+
+      page.blocks.push(block);
+    }
+
+    // ページを追加
+    if (page.blocks.length > 0) {
+      fullTextAnnotation.pages.push(page);
+    }
+
+    logTrace("[VISION:PDF] VisionDocument構築完了 - blocks:", page.blocks.length);
+
+    // 一時ファイルを削除
+    try {
+      DriveApp.getFileById(convertedFile.id).setTrashed(true);
+      logTrace("[VISION:PDF] 一時ファイルを削除");
+    } catch (e) {
+      logWarn("[VISION:PDF] 一時ファイル削除失敗:", e.message);
+    }
+
+    return fullTextAnnotation;
+
+  } catch (error) {
+    logError("[VISION:PDF] PDF Vision OCRエラー:", error.message, error.stack);
+    return null;
+  }
+}
+
+// ================================
+//  8.5. Vision API 表構造復元関数群
+// ================================
+
+/**
+ * Vision API documentTextDetection を実行し、OCR結果を取得します。
+ * PDF や画像ファイルからテキストと boundingBox を取得します。
+ * 
+ * @param {string} fileId - Google Drive のファイルID
+ * @param {string} fileName - ファイル名
+ * @returns {Object} Vision API の OCR 結果
+ */
+function performVisionDocumentOCR(fileId, fileName) {
+  const apiKey = getVisionApiKey();
+  if (!apiKey) {
+    logError("[VISION:TABLE] Vision API キーが設定されていません");
+    return null;
+  }
+
+  try {
+    logTrace("[VISION:TABLE] Vision documentTextDetection 開始:", fileName);
+
+    // ファイルを Blob で取得
+    const file = DriveApp.getFileById(fileId);
+    const blob = file.getBlob();
+    const mimeType = blob.getContentType();
+
+    // PDFファイルの場合はGoogle Docsに変換してからVision APIで処理
+    if (mimeType === 'application/pdf' || mimeType === MimeType.PDF) {
+      logTrace("[VISION:TABLE] PDFファイルをVision APIで処理中...");
+      return performVisionOCRForPdf(fileId, fileName, apiKey);
+    }
+
+    // 画像ファイルの場合: image フィールドを使用
+    const base64Data = Utilities.base64Encode(blob.getBytes());
+
+    // Vision API にリクエスト（画像ファイル用）
+    const payload = {
+      requests: [{
+        image: {
+          content: base64Data
+        },
+        features: [{
+          type: "DOCUMENT_TEXT_DETECTION",
+          maxResults: 1
+        }]
+      }]
+    };
+
+    const url = "https://vision.googleapis.com/v1/images:annotate?key=" + apiKey;
+    const response = UrlFetchApp.fetch(url, {
+      method: "post",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    const responseCode = response.getResponseCode();
+    if (responseCode !== 200) {
+      const errorText = response.getContentText();
+      logError("[VISION:TABLE] Vision API エラー: " + responseCode, errorText);
+      return null;
+    }
+
+    const result = JSON.parse(response.getContentText());
+    const annotations = result.responses;
+
+    if (!annotations || annotations.length === 0) {
+      logWarn("[VISION:TABLE] Vision API 応答が空:", fileName);
+      return null;
+    }
+
+    const annotation = annotations[0];
+    if (annotation.error) {
+      logError("[VISION:TABLE] Vision API エラー:", annotation.error.message, "code:", annotation.error.code);
+      return null;
+    }
+
+    logTrace("[VISION:TABLE] Vision documentTextDetection 完了:", fileName);
+    return annotation.fullTextAnnotation || null;
+
+  } catch (error) {
+    logError("[VISION:TABLE] Vision documentTextDetection エラー:", error);
+    return null;
+  }
+}
+
+/**
+ * PDFファイルをVision APIでOCR処理します。
+ * PDFをGoogle Docsに変換し、抽出したテキストを再構築してVision API結果形式で返します。
+ * 
+ * @param {string} fileId - Google Drive のファイルID
+ * @param {string} fileName - ファイル名
+ * @param {string} apiKey - Vision API キー
+ * @returns {Object} fullTextAnnotation 形式の結果
+ */
+function performVisionOCRForPdf(fileId, fileName, apiKey) {
+  try {
+    logTrace("[VISION:PDF] PDF Vision OCR開始:", fileName);
+
+    // PDF Blobを取得
+    const file = DriveApp.getFileById(fileId);
+    const blob = file.getBlob();
+
+    // PDFをGoogle Docsに変換
+    logTrace("[VISION:PDF] Google Docsへの変換を開始...");
+    const resource = {
+      title: "temp_vision_pdf_" + fileName,
+      mimeType: MimeType.GOOGLE_DOCS
+    };
+
+    const convertedFile = Drive.Files.insert(resource, blob, {
+      convert: true
+    });
+
+    logTrace("[VISION:PDF] 変換完了 - convertedFileId:", convertedFile.id);
+
+    // 変換されたドキュメントからテキストと構造を取得
+    const doc = DocumentApp.openById(convertedFile.id);
+    const body = doc.getBody();
+    const fullText = body.getText();
+
+    // fullTextAnnotation形式で返すオブジェクトを構築
+    const fullTextAnnotation = {
+      text: fullText,
+      pages: []
+    };
+
+    // 各段落からブロック情報を構築
+    const paragraphs = body.getParagraphs();
+    
+    // ページを作成（PDFは1ページとして扱う）
+    const page = {
+      width: 800,
+      height: 1000,
+      blocks: []
+    };
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const para = paragraphs[i];
+      const text = para.getText();
+      
+      if (!text || text.trim() === "") continue;
+
+      // 段落ブロックを作成
+      const block = {
+        blockType: "TEXT",
+        paragraphs: [{
+          words: [],
+          symbols: [],
+          text: text,
+          boundingBox: {
+            vertices: [
+              { x: 0, y: i * 30 },
+              { x: 800, y: i * 30 },
+              { x: 800, y: (i + 1) * 30 },
+              { x: 0, y: (i + 1) * 30 }
+            ]
+          },
+          confidence: 0.95
+        }],
+        boundingBox: {
+          vertices: [
+            { x: 0, y: i * 30 },
+            { x: 800, y: i * 30 },
+            { x: 800, y: (i + 1) * 30 },
+            { x: 0, y: (i + 1) * 30 }
+          ]
+        },
+        confidence: 0.95
+      };
+
+      // 段落内の単語を抽出
+      const words = text.split(/[\s　]+/).filter(w => w.length > 0);
+      let charIndex = 0;
+      
+      for (const word of words) {
+        const wordStart = text.indexOf(word, charIndex);
+        const wordEnd = wordStart + word.length;
+        
+        const wordObj = {
+          symbols: [],
+          text: word,
+          boundingBox: {
+            vertices: [
+              { x: wordStart * 8, y: i * 30 },
+              { x: wordEnd * 8, y: i * 30 },
+              { x: wordEnd * 8, y: (i + 1) * 30 },
+              { x: wordStart * 8, y: (i + 1) * 30 }
+            ]
+          },
+          confidence: 0.95
+        };
+
+        // 記号情報を追加
+        for (const char of word) {
+          wordObj.symbols.push({
+            text: char,
+            confidence: 0.95
+          });
+        }
+
+        block.paragraphs[0].words.push(wordObj);
+        block.paragraphs[0].symbols.push(...wordObj.symbols);
+        charIndex = wordEnd;
+      }
+
+      page.blocks.push(block);
+    }
+
+    // ページを追加
+    if (page.blocks.length > 0) {
+      fullTextAnnotation.pages.push(page);
+    }
+
+    logTrace("[VISION:PDF] VisionDocument構築完了 - blocks:", page.blocks.length);
+
+    // 一時ファイルを削除
+    try {
+      DriveApp.getFileById(convertedFile.id).setTrashed(true);
+      logTrace("[VISION:PDF] 一時ファイルを削除");
+    } catch (e) {
+      logWarn("[VISION:PDF] 一時ファイル削除失敗:", e.message);
+    }
+
+    return fullTextAnnotation;
+
+  } catch (error) {
+    logError("[VISION:PDF] PDF Vision OCRエラー:", error.message, error.stack);
+    return null;
+  }
+}
+
+/**
+ * Vision API OCR 結果から VisionDocument を取得します。
+ * VisionDocument には pages, blocks, paragraphs, words の階層が含まれる。
+ * 
+ * PDFファイルの場合はGoogle Docsに変換してから処理します。
+ * 
+ * @param {string} fileId - Google Drive のファイルID
+ * @param {string} fileName - ファイル名
+ * @returns {Object|null} VisionDocument オブジェクト
+ */
+function getVisionDocument(fileId, fileName) {
+  const apiKey = getVisionApiKey();
+  if (!apiKey) {
+    logError("[VISION:TABLE] Vision API キーが設定されていません");
+    return null;
+  }
+
+  try {
+    logTrace("[VISION:TABLE] VisionDocument 取得開始:", fileName);
+
+    // ファイルを Blob で取得
+    const file = DriveApp.getFileById(fileId);
+    const blob = file.getBlob();
+    const mimeType = blob.getContentType();
+
+    logTrace("[VISION:TABLE] Blob情報 - MIME:", mimeType, "サイズ:", blob.getBytes().length);
+
+    // PDFファイルの場合はGoogle Docsに変換してからVision APIで処理
+    if (mimeType === 'application/pdf' || mimeType === MimeType.PDF) {
+      logTrace("[VISION:TABLE] PDFファイルをGoogle Docsに変換中...");
+      return getVisionDocumentFromPdf(fileId, fileName, apiKey);
+    }
+
+    // 画像ファイルの場合
+    // Base64 エンコード
+    const base64Data = Utilities.base64Encode(blob.getBytes());
+
+    // Vision API にリクエスト（DOCUMENT_TEXT_DETECTION）
+    const payload = {
+      requests: [{
+        image: {
+          content: base64Data
+        },
+        features: [{
+          type: "DOCUMENT_TEXT_DETECTION",
+          maxResults: 1
+        }]
+      }]
+    };
+
+    const url = "https://vision.googleapis.com/v1/images:annotate?key=" + apiKey;
+    const response = UrlFetchApp.fetch(url, {
+      method: "post",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    if (responseCode !== 200) {
+      logError("[VISION:TABLE] Vision API エラー: " + responseCode, responseText);
+      return null;
+    }
+
+    const result = JSON.parse(responseText);
+    const annotation = result.responses[0];
+
+    if (!annotation) {
+      logWarn("[VISION:TABLE] responses[0] が存在しません");
+      return null;
+    }
+
+    if (annotation.error) {
+      logError("[VISION:TABLE] Vision API エラー:", annotation.error.message, annotation.error.code);
+      return null;
+    }
+
+    if (!annotation.fullTextAnnotation) {
+      logWarn("[VISION:TABLE] fullTextAnnotation が存在しません");
+      return null;
+    }
+
+    logTrace("[VISION:TABLE] VisionDocument 取得完了 - pages:", 
+      annotation.fullTextAnnotation.pages ? annotation.fullTextAnnotation.pages.length : 0);
+
+    return annotation.fullTextAnnotation;
+
+  } catch (error) {
+    logError("[VISION:TABLE] VisionDocument 取得エラー:", error.message, error.stack);
+    return null;
+  }
+}
+
+/**
+ * PDFファイルをGoogle Docsに変換し、Vision APIで処理します。
+ * 
+ * @param {string} fileId - Google Drive のファイルID
+ * @param {string} fileName - ファイル名
+ * @param {string} apiKey - Vision API キー
+ * @returns {Object|null} VisionDocument オブジェクト
+ */
+function getVisionDocumentFromPdf(fileId, fileName, apiKey) {
+  try {
+    logTrace("[VISION:TABLE:PDF] PDF処理開始:", fileName);
+
+    // PDF Blobを取得
+    const file = DriveApp.getFileById(fileId);
+    const blob = file.getBlob();
+
+    // PDFをGoogle Docsに変換
+    logTrace("[VISION:TABLE:PDF] Google Docsへの変換を開始...");
+    const resource = {
+      title: "temp_vision_" + fileName,
+      mimeType: MimeType.GOOGLE_DOCS
+    };
+
+    const convertedFile = Drive.Files.insert(resource, blob, {
+      convert: true
+    });
+
+    logTrace("[VISION:TABLE:PDF] 変換完了 - convertedFileId:", convertedFile.id);
+
+    // 変換されたドキュメントからテキストと構造を取得
+    const doc = DocumentApp.openById(convertedFile.id);
+    const body = doc.getBody();
+    
+    // fullTextAnnotation形式で返すオブジェクトを構築
+    const fullTextAnnotation = {
+      text: body.getText(),
+      pages: []
+    };
+
+    // 各段落からブロック情報を構築
+    const paragraphs = body.getParagraphs();
+    let page = {
+      width: 800,
+      height: 1000,
+      blocks: []
+    };
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const para = paragraphs[i];
+      const text = para.getText();
+      
+      if (!text || text.trim() === "") continue;
+
+      // 段落ブロックを作成（段落のインデックスを使用してY座標を計算）
+      const block = {
+        blockType: "TEXT",
+        paragraphs: [{
+          words: [],
+          symbols: [],
+          text: text,
+          boundingBox: {
+            vertices: [
+              { x: 0, y: i * 30 },
+              { x: 800, y: i * 30 },
+              { x: 800, y: (i + 1) * 30 },
+              { x: 0, y: (i + 1) * 30 }
+            ]
+          },
+          confidence: 0.95
+        }],
+        boundingBox: {
+          vertices: [
+            { x: 0, y: i * 30 },
+            { x: 800, y: i * 30 },
+            { x: 800, y: (i + 1) * 30 },
+            { x: 0, y: (i + 1) * 30 }
+          ]
+        },
+        confidence: 0.95
+      };
+
+      // 段落内の単語を抽出（簡易実装）
+      const words = text.split(/[\s　]+/).filter(w => w.length > 0);
+      let charIndex = 0;
+      
+      for (const word of words) {
+        const wordStart = text.indexOf(word, charIndex);
+        const wordEnd = wordStart + word.length;
+        
+        const wordObj = {
+          symbols: [],
+          text: word,
+          boundingBox: {
+            vertices: [
+              { x: wordStart * 8, y: i * 30 },
+              { x: wordEnd * 8, y: i * 30 },
+              { x: wordEnd * 8, y: (i + 1) * 30 },
+              { x: wordStart * 8, y: (i + 1) * 30 }
+            ]
+          },
+          confidence: 0.95
+        };
+
+        // 記号情報を追加
+        for (const char of word) {
+          wordObj.symbols.push({
+            text: char,
+            confidence: 0.95
+          });
+        }
+
+        block.paragraphs[0].words.push(wordObj);
+        block.paragraphs[0].symbols.push(...wordObj.symbols);
+        charIndex = wordEnd;
+      }
+
+      page.blocks.push(block);
+    }
+
+    // ページを追加
+    if (page.blocks.length > 0) {
+      fullTextAnnotation.pages.push(page);
+    }
+
+    logTrace("[VISION:TABLE:PDF] VisionDocument構築完了 - blocks:", page.blocks.length);
+
+    // 一時ファイルを削除
+    try {
+      DriveApp.getFileById(convertedFile.id).setTrashed(true);
+      logTrace("[VISION:TABLE:PDF] 一時ファイルを削除");
+    } catch (e) {
+      logWarn("[VISION:TABLE:PDF] 一時ファイル削除失敗:", e.message);
+    }
+
+    return fullTextAnnotation;
+
+  } catch (error) {
+    logError("[VISION:TABLE:PDF] PDF処理エラー:", error.message, error.stack);
+    return null;
+  }
+}
+
+// ================================
+//  8.6. BoundingBox 解析ユーティリティ
+// ================================
+
+/**
+ * バウンディングボックスの中心座標を取得します。
+ * 
+ * @param {Object} boundingBox - Vision API のバウンディングボックス
+ * @returns {Object} {x, y} 中心座標
+ */
+function getBoundingBoxCenter(boundingBox) {
+  if (!boundingBox || !boundingBox.vertices) return { x: 0, y: 0 };
+
+  const vertices = boundingBox.vertices;
+  if (vertices.length < 4) return { x: 0, y: 0 };
+
+  // 4頂点から境界を計算
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+
+  for (const v of vertices) {
+    if (v.x < minX) minX = v.x;
+    if (v.x > maxX) maxX = v.x;
+    if (v.y < minY) minY = v.y;
+    if (v.y > maxY) maxY = v.y;
+  }
+
+  return {
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2
+  };
+}
+
+/**
+ * バウンディングボックスの幅を取得します。
+ * 
+ * @param {Object} boundingBox - Vision API のバウンディングボックス
+ * @returns {number} 幅
+ */
+function getBoundingBoxWidth(boundingBox) {
+  if (!boundingBox || !boundingBox.vertices) return 0;
+  if (boundingBox.vertices.length < 4) return 0;
+
+  const xs = boundingBox.vertices.map(v => v.x || 0);
+  return Math.max(...xs) - Math.min(...xs);
+}
+
+/**
+ * バウンディングボックスの高さを取得します。
+ * 
+ * @param {Object} boundingBox - Vision API のバウンディングボックス
+ * @returns {number} 高さ
+ */
+function getBoundingBoxHeight(boundingBox) {
+  if (!boundingBox || !boundingBox.vertices) return 0;
+  if (boundingBox.vertices.length < 4) return 0;
+
+  const ys = boundingBox.vertices.map(v => v.y || 0);
+  return Math.max(...ys) - Math.min(...ys);
+}
+
+/**
+ * 2つのバウンディングボックスが垂直方向に重なるかを判定します。
+ * 
+ * @param {Object} box1 - 第一个バウンディングボックス
+ * @param {Object} box2 - 2个目のバウンディングボックス
+ * @param {number} threshold - 重なり閾値（0-1、默认值0.3）
+ * @returns {boolean} 重なる場合はtrue
+ */
+function boxesOverlapVertically(box1, box2, threshold = 0.3) {
+  if (!box1 || !box2) return false;
+
+  const h1 = getBoundingBoxHeight(box1);
+  const h2 = getBoundingBoxHeight(box2);
+  const c1 = getBoundingBoxCenter(box1);
+  const c2 = getBoundingBoxCenter(box2);
+
+  if (h1 === 0 || h2 === 0) return false;
+
+  // Y軸方向の重なりを計算
+  const top1 = c1.y - h1 / 2;
+  const bottom1 = c1.y + h1 / 2;
+  const top2 = c2.y - h2 / 2;
+  const bottom2 = c2.y + h2 / 2;
+
+  const overlap = Math.max(0, Math.min(bottom1, bottom2) - Math.max(top1, top2));
+  const minHeight = Math.min(h1, h2);
+
+  return minHeight > 0 && overlap / minHeight >= threshold;
+}
+
+/**
+ * 2つのバウンディングボックスが水平方向に重なる（同じ行にある）かを判定します。
+ * 
+ * @param {Object} box1 - 第一个バウンディングボックス
+ * @param {Object} box2 - 2个目のバウンディングボックス
+ * @param {number} threshold - 重なり閾値（0-1、默认值0.3）
+ * @returns {boolean} 同じ行にある場合はtrue
+ */
+function boxesOverlapHorizontally(box1, box2, threshold = 0.3) {
+  if (!box1 || !box2) return false;
+
+  const w1 = getBoundingBoxWidth(box1);
+  const w2 = getBoundingBoxWidth(box2);
+  const c1 = getBoundingBoxCenter(box1);
+  const c2 = getBoundingBoxCenter(box2);
+
+  if (w1 === 0 || w2 === 0) return false;
+
+  // X軸方向の重なりを計算
+  const left1 = c1.x - w1 / 2;
+  const right1 = c1.x + w1 / 2;
+  const left2 = c2.x - w2 / 2;
+  const right2 = c2.x + w2 / 2;
+
+  const overlap = Math.max(0, Math.min(right1, right2) - Math.max(left1, left2));
+  const minWidth = Math.min(w1, w2);
+
+  return minWidth > 0 && overlap / minWidth >= threshold;
+}
+
+/**
+ * 2つのバウンディングボックスの垂直方向の距離を計算します。
+ * 
+ * @param {Object} box1 - 第一个バウンディングボックス
+ * @param {Object} box2 - 2个目のバウンディングボックス
+ * @returns {number} Y軸方向の距離
+ */
+function calculateVerticalDistance(box1, box2) {
+  const c1 = getBoundingBoxCenter(box1);
+  const c2 = getBoundingBoxCenter(box2);
+  return Math.abs(c1.y - c2.y);
+}
+
+/**
+ * 2つのバウンディングボックスの水平方向の距離を計算します。
+ * 
+ * @param {Object} box1 - 第一个バウンディングボックス
+ * @param {Object} box2 - 2个目のバウンディングボックス
+ * @returns {number} X軸方向の距離
+ */
+function calculateHorizontalDistance(box1, box2) {
+  const c1 = getBoundingBoxCenter(box1);
+  const c2 = getBoundingBoxCenter(box2);
+  return c2.x - c1.x; // 正の値 = box2 は box1 の右側
+}
+
+/**
+ * VisionDocument から全単語情報を再帰的に抽出します。
+ * 
+ * @param {Object} document - VisionDocument オブジェクト
+ * @returns {Array} 単語情報の配列
+ */
+function extractAllWords(document) {
+  const words = [];
+
+  if (!document || !document.pages) return words;
+
+  function traverseSymbols(symbols, wordBox) {
+    if (!symbols) return "";
+    let text = "";
+    for (const symbol of symbols) {
+      if (symbol.text) {
+        text += symbol.text;
+      }
+    }
+    return text;
+  }
+
+  function traverseWords(wordsArr) {
+    if (!wordsArr) return;
+    for (const word of wordsArr) {
+      const symbols = word.symbols || [];
+      let text = "";
+      for (const symbol of symbols) {
+        if (symbol.text) {
+          text += symbol.text;
+        }
+      }
+      if (text.trim()) {
+        words.push({
+          text: text,
+          boundingBox: word.boundingBox,
+          confidence: word.confidence,
+          vertices: word.boundingBox ? word.boundingBox.vertices : []
+        });
+      }
+    }
+  }
+
+  function traverseParagraphs(paragraphs) {
+    if (!paragraphs) return;
+    for (const para of paragraphs) {
+      traverseWords(para.words);
+    }
+  }
+
+  function traverseBlocks(blocks) {
+    if (!blocks) return;
+    for (const block of blocks) {
+      traverseParagraphs(block.paragraphs);
+    }
+  }
+
+  for (const page of document.pages) {
+    traverseBlocks(page.blocks);
+  }
+
+  return words;
+}
+
+// ================================
+//  8.7. 表構造検出・抽出関数群
+// ================================
+
+/**
+ * Vision API OCR 結果から表データを検出し、JSON 形式で返します。
+ * 
+ * @param {Object} document - VisionDocument オブジェクト
+ * @returns {Array} 表データの配列（各要素は JSON オブジェクト）
+ */
+function detectTableFromVisionDocument(document) {
+  if (!document) {
+    logWarn("[TABLE] VisionDocument が渡されませんでした");
+    return [];
+  }
+
+  logTrace("[TABLE] 表構造検出開始");
+
+  // 全単語を抽出
+  const words = extractAllWords(document);
+  logTrace("[TABLE] 抽出された単語数:", words.length);
+
+  if (words.length === 0) {
+    return [];
+  }
+
+  // 単語を行にグループ化
+  const lines = groupWordsIntoLines(words);
+  logTrace("[TABLE] グループ化された行数:", lines.length);
+
+  if (lines.length === 0) {
+    return [];
+  }
+
+  // ヘッダー行を検出
+  const headers = detectTableHeaders(lines);
+  logTrace("[TABLE] 検出されたヘッダー:", headers.join(", "));
+
+  if (headers.length === 0) {
+    logWarn("[TABLE] ヘッダーが検出できませんでした");
+    return [];
+  }
+
+  // 表データを抽出
+  const tableData = extractTableData(lines, headers);
+  logTrace("[TABLE] 抽出されたデータ行数:", tableData.length);
+
+  return tableData;
+}
+
+/**
+ * 単語を行にグループ化します。
+ * Y座標が近い単語は同じ行としてグループ化されます。
+ * 
+ * @param {Array} words - extractAllWords で抽出した単語配列
+ * @returns {Array} 行の配列（各要素は単語オブジェクトの配列）
+ */
+function groupWordsIntoLines(words) {
+  if (!words || words.length === 0) return [];
+
+  // Y座標でソート
+  const sortedWords = [...words].sort((a, b) => {
+    const centerA = getBoundingBoxCenter(a.boundingBox);
+    const centerB = getBoundingBoxCenter(b.boundingBox);
+    return centerA.y - centerB.y;
+  });
+
+  const lines = [];
+  let currentLine = [sortedWords[0]];
+  const avgHeight = words.reduce((sum, w) => sum + getBoundingBoxHeight(w.boundingBox), 0) / words.length;
+
+  for (let i = 1; i < sortedWords.length; i++) {
+    const word = sortedWords[i];
+    const prevWord = currentLine[currentLine.length - 1];
+    const prevCenter = getBoundingBoxCenter(prevWord.boundingBox);
+    const currentCenter = getBoundingBoxCenter(word.boundingBox);
+
+    // Y座標の差が平均高さの半分以下なら同じ行
+    const verticalDist = Math.abs(currentCenter.y - prevCenter.y);
+    const sameRow = verticalDist <= avgHeight * 0.6;
+
+    if (sameRow) {
+      currentLine.push(word);
+    } else {
+      // 行を保存して新しい行を開始
+      // X座標でソート（行内の単語を左から右へ）
+      currentLine.sort((a, b) => {
+        const centerA = getBoundingBoxCenter(a.boundingBox);
+        const centerB = getBoundingBoxCenter(b.boundingBox);
+        return centerA.x - centerB.x;
+      });
+      lines.push(currentLine);
+      currentLine = [word];
+    }
+  }
+
+  // 最後の行を追加
+  if (currentLine.length > 0) {
+    currentLine.sort((a, b) => {
+      const centerA = getBoundingBoxCenter(a.boundingBox);
+      const centerB = getBoundingBoxCenter(b.boundingBox);
+      return centerA.x - centerB.x;
+    });
+    lines.push(currentLine);
+  }
+
+  return lines;
+}
+
+/**
+ * 表のヘッダー行を検出します。
+ * 最初の行をヘッダーとして扱い、一般的な列名を抽出します。
+ * 
+ * @param {Array} lines - groupWordsIntoLines で生成された行配列
+ * @returns {Array} ヘッダー名の配列
+ */
+function detectTableHeaders(lines) {
+  if (!lines || lines.length === 0) return [];
+
+  // 最初の行をヘッダー行とする
+  const headerLine = lines[0];
+  const headers = headerLine.map(word => word.text.trim());
+
+  // ヘッダーの妥当性をチェック
+  // - 空のヘッダーは除外
+  // - 短すぎるヘッダーは除外（1文字は疑わしい）
+  const validHeaders = headers.filter(h => h && h.length >= 1);
+
+  // ヘッダーが少なすぎる場合は空行をスキップして次の行を試す
+  if (validHeaders.length < 2 && lines.length > 1) {
+    // 2行目以降も試す
+    for (let i = 1; i < lines.length; i++) {
+      const candidateLine = lines[i];
+      const candidateHeaders = candidateLine.map(word => word.text.trim()).filter(h => h && h.length >= 1);
+      if (candidateHeaders.length >= validHeaders.length) {
+        return candidateHeaders;
+      }
+    }
+  }
+
+  return validHeaders;
+}
+
+/**
+ * 列位置を分析し、列の境界を確定します。
+ * 
+ * @param {Array} lines - 行配列
+ * @param {Array} headers - ヘッダー配列
+ * @returns {Array} 列境界のX座標配列
+ */
+function analyzeColumnPositions(lines, headers) {
+  if (!lines || lines.length === 0 || !headers) return [];
+
+  // ヘッダー行の各単語の中心X座標を列境界とする
+  const headerLine = lines[0];
+  const boundaries = [0]; // 左端
+
+  for (const word of headerLine) {
+    const center = getBoundingBoxCenter(word.boundingBox);
+    const width = getBoundingBoxWidth(word.boundingBox);
+    boundaries.push(center.x + width / 2);
+  }
+
+  return boundaries;
+}
+
+/**
+ * 表データを行から抽出します。
+ * 
+ * @param {Array} lines - 行配列
+ * @param {Array} headers - ヘッダー配列
+ * @returns {Array} JSON オブジェクトの配列
+ */
+function extractTableData(lines, headers) {
+  if (!lines || lines.length === 0 || !headers || headers.length === 0) return [];
+
+  const tableData = [];
+  const numColumns = headers.length;
+
+  // ヘッダー行以降を処理
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line || line.length === 0) continue;
+
+    // 行を列に分割
+    const rowData = assignWordsToColumns(line, headers.length);
+    
+    // 空の行をスキップ
+    if (rowData.every(cell => !cell || cell.trim() === "")) {
+      continue;
+    }
+
+    // JSON オブジェクトを作成
+    const record = createTableRecord(headers, rowData);
+    tableData.push(record);
+  }
+
+  return tableData;
+}
+
+/**
+ * 行の単語を列に割り当てます。
+ * 
+ * @param {Array} lineWords - 行の単語配列
+ * @param {number} numColumns - 列数
+ * @returns {Array} 各列のテキスト配列
+ */
+function assignWordsToColumns(lineWords, numColumns) {
+  if (!lineWords || lineWords.length === 0) {
+    return new Array(numColumns).fill("");
+  }
+
+  // ヘッダーと同じ分割点で分割
+  // 簡易実装: 単語を均等に分配（ただし境界を検出できる場合は使用）
+  const rowData = new Array(numColumns).fill("");
+
+  // 各単語を列に割り当て
+  for (const word of lineWords) {
+    const centerX = getBoundingBoxCenter(word.boundingBox).x;
+    // 最も近い列を見つける
+    // 単純な実装: 単語を均等に配分
+    const colIndex = Math.min(Math.floor(centerX / 1000) % numColumns, numColumns - 1);
+    if (rowData[colIndex]) {
+      rowData[colIndex] += " " + word.text;
+    } else {
+      rowData[colIndex] = word.text;
+    }
+  }
+
+  // 空白をトリム
+  return rowData.map(cell => (cell || "").trim());
+}
+
+/**
+ * ヘッダーと行データから JSON オブジェクトを作成します。
+ * 
+ * @param {Array} headers - ヘッダー配列
+ * @param {Array} rowCells - 行データ配列
+ * @returns {Object} JSON オブジェクト
+ */
+function createTableRecord(headers, rowCells) {
+  const record = {};
+
+  for (let i = 0; i < headers.length && i < rowCells.length; i++) {
+    const header = headers[i].trim();
+    const value = rowCells[i].trim();
+
+    if (header) {
+      // 数値を検出
+      const numValue = parseFloat(value);
+      if (!isNaN(numValue) && String(numValue) === value) {
+        record[header] = numValue;
+      } else {
+        record[header] = value;
+      }
+    }
+  }
+
+  return record;
+}
+
+/**
+ * 表データを JSON 文字列に変換します。
+ * 
+ * @param {Array} tableData - detectTableFromVisionDocument で生成された配列
+ * @returns {string} JSON 文字列
+ */
+function convertTableToJsonString(tableData) {
+  if (!tableData || tableData.length === 0) return "";
+
+  try {
+    return JSON.stringify(tableData, null, 2);
+  } catch (error) {
+    logError("[TABLE] JSON 変換エラー:", error);
+    return "";
+  }
+}
+
+/**
+ * 表レコード（JSON オブジェクト）を自然言語テキストに変換します。
+ * Embedding 生成時に使用します。
+ * 
+ * @param {Object} record - 表レコード（JSON オブジェクト）
+ * @returns {string} 自然言語テキスト
+ */
+function convertTableRecordToNaturalLanguage(record) {
+  if (!record || typeof record !== "object") return "";
+
+  const lines = [];
+  for (const [key, value] of Object.entries(record)) {
+    lines.push(`${key}: ${value}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * 表データから Embedding を生成します。
+ * 
+ * @param {Object} record - 表レコード（JSON オブジェクト）
+ * @returns {Array|null} Embedding ベクトル
+ */
+function generateTableChunkEmbedding(record) {
+  if (!record) return null;
+
+  const naturalText = convertTableRecordToNaturalLanguage(record);
+  if (!naturalText) return null;
+
+  return getEmbeddingWithCache(naturalText);
+}
+
+/**
+ * Vision API OCR 結果から表データを抽出し、RAG 用に処理します。
+ * 
+ * @param {string} fileId - Google Drive のファイルID
+ * @param {string} fileName - ファイル名
+ * @returns {Object} RAG 用に処理された結果
+ *   - jsonString: JSON 文字列（TextChunk に保存用）
+ *   - naturalText: 自然言語テキスト（Embedding 生成用）
+ *   - embedding: Embedding ベクトル
+ *   - records: 元の JSON オブジェクト配列
+ */
+function processTableForRag(fileId, fileName) {
+  try {
+    logTrace("[TABLE:RAG] 表データ RAG 処理開始:", fileName);
+
+    // VisionDocument を取得
+    const document = getVisionDocument(fileId, fileName);
+    if (!document) {
+      logWarn("[TABLE:RAG] VisionDocument の取得に失敗:", fileName);
+      return null;
+    }
+
+    // 表データを抽出
+    const tableData = detectTableFromVisionDocument(document);
+    if (!tableData || tableData.length === 0) {
+      logWarn("[TABLE:RAG] 表データが抽出されませんでした:", fileName);
+      return null;
+    }
+
+    logInfo("[TABLE:RAG] 表データ抽出成功:", fileName, "-", tableData.length, "行");
+
+    // 各レコードから Embedding を生成
+    const chunks = [];
+    for (const record of tableData) {
+      const jsonString = JSON.stringify(record);
+      const naturalText = convertTableRecordToNaturalLanguage(record);
+      const embedding = generateTableChunkEmbedding(record);
+
+      chunks.push({
+        jsonString: jsonString,
+        naturalText: naturalText,
+        embedding: embedding,
+        record: record
+      });
+    }
+
+    logTrace("[TABLE:RAG] RAG 処理完了:", fileName, "-", chunks.length, "チャンク");
+
+    return {
+      jsonString: JSON.stringify(tableData, null, 2),
+      naturalText: tableData.map(r => convertTableRecordToNaturalLanguage(r)).join("\n\n"),
+      records: tableData,
+      chunks: chunks
+    };
+
+  } catch (error) {
+    logError("[TABLE:RAG] RAG 処理エラー:", error);
+    return null;
+  }
+}
+
+/**
+ * PDF や画像ファイルから表データを抽出し、RAG 用に処理します。
+ * Vision API を使用して表構造を復元します。
+ * 
+ * @param {string} fileId - Google Drive のファイルID
+ * @param {string} fileName - ファイル名
+ * @param {string} mimeType - MIME タイプ
+ * @returns {Object} RAG 用に処理された結果
+ */
+function extractTableWithStructure(fileId, fileName, mimeType) {
+  // PDF または画像ファイルのみ処理
+  const supportedTypes = ['application/pdf', MimeType.PDF];
+  
+  // 画像タイプも追加
+  const imageTypes = [
+    'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp',
+    MimeType.JPEG, MimeType.PNG, MimeType.GIF, MimeType.BMP
+  ];
+  
+  const isSupported = supportedTypes.includes(mimeType) || imageTypes.includes(mimeType);
+  
+  if (!isSupported) {
+    logTrace("[TABLE:EXTRACT] サポートされていないファイルタイプ:", mimeType);
+    return null;
+  }
+
+  // Vision API が利用可能かチェック
+  const apiKey = getVisionApiKey();
+  if (!apiKey) {
+    logWarn("[TABLE:EXTRACT] Vision API キーが設定されていません");
+    return null;
+  }
+
+  try {
+    logTrace("[TABLE:EXTRACT] 表構造抽出開始:", fileName);
+    const result = processTableForRag(fileId, fileName);
+    
+    if (result) {
+      logInfo("[TABLE:EXTRACT] 表構造抽出成功:", fileName, "-", result.records.length, "レコード");
+    }
+    
+    return result;
+
+  } catch (error) {
+    logError("[TABLE:EXTRACT] 表構造抽出エラー:", error);
+    return null;
+  }
+}
+
+/**
+ * 表データを RAG インデックスに追加します。
+ * 
+ * @param {Sheet} sheet - RAG シート
+ * @param {Object} ragResult - extractTableWithStructure の結果
+ * @param {string} fileId - ファイルID
+ * @param {string} fileName - ファイル名
+ * @param {string} mimeType - MIME タイプ
+ * @returns {boolean} 成功した場合 true
+ */
+function indexTableData(sheet, ragResult, fileId, fileName, mimeType) {
+  if (!ragResult || !ragResult.chunks || ragResult.chunks.length === 0) {
+    return false;
+  }
+
+  try {
+    logTrace("[TABLE:INDEX] 表データをインデックスに追加:", fileName);
+
+    for (let i = 0; i < ragResult.chunks.length; i++) {
+      const chunk = ragResult.chunks[i];
+      
+      if (chunk.embedding) {
+        const metadata = {
+          fileId: fileId,
+          fileName: fileName,
+          chunkIndex: i,
+          totalChunks: ragResult.chunks.length,
+          charCount: chunk.naturalText.length,
+          preview: chunk.naturalText.substring(0, 100),
+          mimeType: mimeType
+        };
+
+        // キーワードを抽出
+        const keywords = extractKeywords(chunk.naturalText);
+
+        sheet.appendRow([
+          metadata.fileId,
+          metadata.fileName,
+          metadata.mimeType,
+          chunk.jsonString, // TextChunk に JSON を保存
+          JSON.stringify(chunk.embedding),
+          metadata.chunkIndex,
+          new Date(),
+          metadata.charCount,
+          metadata.preview,
+          metadata.totalChunks,
+          keywords.join(",")
+        ]);
+
+        Utilities.sleep(300); // API 呼び出し間隔
+      }
+    }
+
+    logInfo("[TABLE:INDEX] 表データインデックス完了:", fileName, "-", ragResult.chunks.length, "チャンク");
+    return true;
+
+  } catch (error) {
+    logError("[TABLE:INDEX] インデックス追加エラー:", error);
+    return false;
+  }
+}
+
+/**
+ * 表形式テキストを JSON 配列に変換します（Vision API が利用できない場合のフォールバック）。
+ * 
+ * @param {string} text - 表形式テキスト（タブ区切りなど）
+ * @returns {Array} JSON オブジェクトの配列
+ */
+function parseTableTextToJson(text) {
+  if (!text || typeof text !== "string") return [];
+
+  const lines = text.split("\n").filter(line => line.trim());
+  if (lines.length < 2) return []; // ヘッダー + 1行以上が必要
+
+  // 最初の行をヘッダーとして使用
+  const headerLine = lines[0];
+  const headers = headerLine.split("\t").map(h => h.trim()).filter(h => h);
+
+  if (headers.length === 0) return [];
+
+  const tableData = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split("\t").map(c => c.trim());
+    const record = {};
+
+    for (let j = 0; j < headers.length && j < cells.length; j++) {
+      const header = headers[j];
+      const value = cells[j];
+
+      // 数値変換
+      const numValue = parseFloat(value);
+      record[header] = !isNaN(numValue) && String(numValue) === value ? numValue : value;
+    }
+
+    // 空でないレコードのみ追加
+    if (Object.values(record).some(v => v !== "" && v !== null)) {
+      tableData.push(record);
+    }
+  }
+
+  return tableData;
+}
+
 // ================================
 //  9. チャンク分割関数群
 // ================================
@@ -2923,6 +4501,294 @@ function createChunkMetadata(chunk, fileId, fileName, chunkIndex, totalChunks) {
 }
 
 // ================================
+//  9.5. 表データチャンク分割関数群
+// ================================
+
+/**
+ * 表データ（JSON配列）をチャンクに分割します。
+ * 各行を1レコードとして、必要に応じて複数行を1チャンクにまとめます。
+ * 
+ * @param {Array} tableData - JSON配列（表データ）
+ * @param {Object} config - チャンク設定（省略時は CHUNK_CONFIG を使用）
+ * @returns {Array} チャンクオブジェクトの配列
+ */
+function splitTableIntoChunks(tableData, config) {
+  if (!tableData || tableData.length === 0) {
+    return [];
+  }
+
+  const chunkConfig = config || CHUNK_CONFIG;
+  const chunks = [];
+  
+  // 1行ごとのレコードを生成
+  const records = [];
+  for (let i = 0; i < tableData.length; i++) {
+    const record = tableData[i];
+    const recordText = convertTableRecordToNaturalLanguage(record);
+    
+    records.push({
+      index: i,
+      text: recordText,
+      record: record,
+      charCount: recordText.length
+    });
+  }
+
+  // レコードを集約してチャンクにする
+  let currentChunk = [];
+  let currentCharCount = 0;
+
+  for (const record of records) {
+    // レコードをチャンクに追加した場合の文字数を計算
+    const textToAdd = currentChunk.length > 0 ? "\n\n" + record.text : record.text;
+    const newCharCount = currentCharCount + textToAdd.length;
+
+    // 最大サイズを超える場合
+    if (currentChunk.length > 0 && newCharCount > chunkConfig.MAX_CHUNK_SIZE) {
+      // 現在のチャンクを保存
+      chunks.push({
+        records: currentChunk,
+        text: currentChunk.map(r => r.text).join("\n\n"),
+        recordCount: currentChunk.length,
+        charCount: currentCharCount
+      });
+
+      // オーバーラップ処理
+      if (chunkConfig.CHUNK_OVERLAP > 0 && chunks.length > 0) {
+        const lastChunk = chunks[chunks.length - 1];
+        // 最後の数レコードを次のチャンクに含める
+        const overlapCount = Math.min(
+          Math.ceil(chunkConfig.CHUNK_OVERLAP / 100), // 概算で100文字/レコード
+          lastChunk.records.length
+        );
+        
+        // オーバーラップするレコードを取得
+        const overlapRecords = lastChunk.records.slice(-overlapCount);
+        currentChunk = overlapRecords;
+        currentCharCount = overlapRecords.reduce((sum, r) => sum + r.text.length + 2, 0);
+      } else {
+        currentChunk = [];
+        currentCharCount = 0;
+      }
+    }
+
+    // レコードを現在のチャンクに追加
+    currentChunk.push(record);
+    currentCharCount += (currentCharCount > 0 ? 2 : 0) + record.charCount;
+
+    // 最小サイズに達していない場合は継続
+    if (currentCharCount < chunkConfig.MIN_CHUNK_SIZE) {
+      continue;
+    }
+
+    // チャンクを保存
+    chunks.push({
+      records: [...currentChunk],
+      text: currentChunk.map(r => r.text).join("\n\n"),
+      recordCount: currentChunk.length,
+      charCount: currentCharCount
+    });
+
+    currentChunk = [];
+    currentCharCount = 0;
+  }
+
+  // 最後のチャンクを保存
+  if (currentChunk.length > 0) {
+    chunks.push({
+      records: currentChunk,
+      text: currentChunk.map(r => r.text).join("\n\n"),
+      recordCount: currentChunk.length,
+      charCount: currentCharCount
+    });
+  }
+
+  return chunks;
+}
+
+/**
+ * 表データチャンクからEmbeddingを生成します。
+ * 各チャンクの自然言語テキストをEmbeddingに変換します。
+ * 
+ * @param {Object} chunk - splitTableIntoChunksで生成されたチャンク
+ * @returns {Object} Embedding結果 { embedding: Array, naturalText: string }
+ */
+function generateTableChunkEmbeddingFromChunk(chunk) {
+  if (!chunk || !chunk.text) {
+    return null;
+  }
+
+  const naturalText = chunk.text;
+  const embedding = getEmbeddingWithCache(naturalText);
+
+  return {
+    embedding: embedding,
+    naturalText: naturalText
+  };
+}
+
+/**
+ * 表データ全体をRAG用に処理し、チャンクとEmbeddingを生成します。
+ * 
+ * @param {Array} tableData - JSON配列（表データ）
+ * @param {string} fileId - ファイルID
+ * @param {string} fileName - ファイル名
+ * @param {Object} config - チャンク設定（省略時は CHUNK_CONFIG を使用）
+ * @returns {Object} RAG処理結果
+ */
+function processTableDataForRag(tableData, fileId, fileName, config) {
+  if (!tableData || tableData.length === 0) {
+    return null;
+  }
+
+  // チャンクに分割
+  const chunks = splitTableIntoChunks(tableData, config);
+  logTrace("[TABLE:CHUNK] チャンク分割完了:", chunks.length, "チャンク");
+
+  // 各チャンクに対してEmbeddingを生成
+  const ragChunks = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const result = generateTableChunkEmbeddingFromChunk(chunk);
+
+    if (result && result.embedding) {
+      ragChunks.push({
+        chunkIndex: i,
+        totalChunks: chunks.length,
+        records: chunk.records,
+        recordCount: chunk.recordCount,
+        jsonString: JSON.stringify(chunk.records, null, 2),
+        naturalText: result.naturalText,
+        embedding: result.embedding,
+        charCount: chunk.charCount,
+        preview: chunk.text.substring(0, 100) + (chunk.text.length > 100 ? '...' : ''),
+        fileId: fileId,
+        fileName: fileName
+      });
+
+      // API呼び出し間隔を空ける
+      Utilities.sleep(100);
+    }
+  }
+
+  logInfo("[TABLE:CHUNK] RAG処理完了:", ragChunks.length, "チャンク");
+
+  return {
+    tableData: tableData,
+    chunks: ragChunks,
+    totalChunks: ragChunks.length,
+    fileId: fileId,
+    fileName: fileName
+  };
+}
+
+/**
+ * 表データチャンクをRAGシートに追加します。
+ * 
+ * @param {Sheet} sheet - RAGシート
+ * @param {Object} ragResult - processTableDataForRag の結果
+ * @param {string} mimeType - MIMEタイプ
+ * @returns {boolean} 成功した場合 true
+ */
+function indexTableDataChunks(sheet, ragResult, mimeType) {
+  if (!ragResult || !ragResult.chunks || ragResult.chunks.length === 0) {
+    return false;
+  }
+
+  try {
+    logTrace("[TABLE:INDEX:CHUNKS] チャンクをインデックスに追加:", ragResult.fileName);
+
+    for (const chunk of ragResult.chunks) {
+      if (!chunk.embedding) continue;
+
+      // キーワードを抽出
+      const keywords = extractKeywords(chunk.naturalText);
+
+      sheet.appendRow([
+        chunk.fileId,
+        chunk.fileName,
+        mimeType,
+        chunk.jsonString,
+        JSON.stringify(chunk.embedding),
+        chunk.chunkIndex,
+        new Date(),
+        chunk.charCount,
+        chunk.preview,
+        chunk.totalChunks,
+        keywords.join(",")
+      ]);
+
+      Utilities.sleep(300);
+    }
+
+    logInfo("[TABLE:INDEX:CHUNKS] インデックス追加完了:", ragResult.fileName, "-", ragResult.chunks.length, "チャンク");
+    return true;
+
+  } catch (error) {
+    logError("[TABLE:INDEX:CHUNKS] エラー:", error);
+    return false;
+  }
+}
+
+/**
+ * PDF/画像ファイルから表データを抽出し、RAGインデックスに追加します。
+ * extractTableWithStructure と indexTableDataChunks を組み合わせた高レベル関数です。
+ * 
+ * @param {string} fileId - Google DriveのファイルID
+ * @param {string} fileName - ファイル名
+ * @param {string} mimeType - MIMEタイプ
+ * @returns {Object} 処理結果
+ */
+function extractAndIndexTableData(fileId, fileName, mimeType) {
+  try {
+    logInfo("[TABLE:FULL] 表データ抽出・インデックス開始:", fileName);
+
+    // Vision APIで表データを抽出
+    const ragResult = extractTableWithStructure(fileId, fileName, mimeType);
+    
+    if (!ragResult) {
+      logWarn("[TABLE:FULL] 表データの抽出に失敗:", fileName);
+      return { success: false, error: "表データの抽出に失敗" };
+    }
+
+    // チャンクを生成
+    const chunksResult = processTableDataForRag(
+      ragResult.records,
+      fileId,
+      fileName,
+      CHUNK_CONFIG
+    );
+
+    if (!chunksResult || chunksResult.chunks.length === 0) {
+      logWarn("[TABLE:FULL] チャUNK生成に失敗:", fileName);
+      return { success: false, error: "チャンク生成に失敗" };
+    }
+
+    // RAGシートに追加
+    const sheet = getRagSheet();
+    const success = indexTableDataChunks(sheet, chunksResult, mimeType);
+
+    if (success) {
+      logInfo("[TABLE:FULL] 表データインデックス完了:", fileName, "-", chunksResult.totalChunks, "チャンク");
+      return {
+        success: true,
+        fileId: fileId,
+        fileName: fileName,
+        totalChunks: chunksResult.totalChunks,
+        recordCount: ragResult.records.length
+      };
+    } else {
+      logError("[TABLE:FULL] インデックス追加に失敗:", fileName);
+      return { success: false, error: "インデックス追加に失敗" };
+    }
+
+  } catch (error) {
+    logError("[TABLE:FULL] エラー:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ================================
 //  10. Embedding 関数
 // ================================
 
@@ -2957,12 +4823,36 @@ function getEmbedding(text) {
 
 /**
  * Embeddingをキャッシュから取得、またはAPIを呼び出して取得
+ * 
+ * 【正規化のデフォルト】
+ * - デフォルトでは正規化をスキップ（skipNormalization: true）
+ * - テーブル構造復元機能からの呼び出しではskipNormalization: falseを渡して正規化を適用
+ * 
+ * 【正規化の処理内容】
+ * - 全角・半角の統一
+ * - 全角スペース → 半角スペース
+ * - 連続空白・改行の統一
+ * - 記号の揺らぎ統一
+ * - 数値は文字列に統一
+ * 
+ * 処理順序: 入力テキスト → 正規化 → MD5ハッシュ → キャッシュキー
+ * 
  * @param {string} text - エンベディング化するテキスト
+ * @param {Object} options - オプション設定
+ * @param {boolean} options.skipNormalization - 正規化をスキップする場合はtrue（デフォルト: true）
  * @returns {Array<number>|null} エンベディングベクトル
  */
-function getEmbeddingWithCache(text) {
+function getEmbeddingWithCache(text, options = {}) {
   try {
-    const hash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, text);
+    // テキストの正規化（デフォルトでは正規化あり）
+    let normalizedText = text;
+    // skipNormalizationが明示的にtrueの場合のみ正規化をスキップ
+    if (options.skipNormalization !== true) {
+      normalizedText = normalizeTextForCache(text);
+    }
+
+    // 正規化されたテキストでハッシュを計算
+    const hash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, normalizedText);
     const hashStr = Utilities.base64Encode(hash).substring(0, 20);
     const cacheKey = "emb_" + hashStr;
 
@@ -3015,6 +4905,153 @@ function clearEmbeddingCache() {
     logError("[CACHE] Embeddingキャッシュクリアエラー:", error);
     return 0;
   }
+}
+
+// ================================
+//  10.1. Embedding テキスト正規化関数群
+// ================================
+
+/**
+ * Embedding用テキスト正規化関数（慎之介の構造化システム向け）
+ * 
+ * 処理順序: JSON → 自然文 → 正規化 → MD5 → キャッシュキー
+ * この順番が最も安定します。
+ * 
+ * 【追加した正規化】
+ * ✓ 全角・半角の統一
+ * ✓ 全角スペース → 半角スペース
+ * ✓ 連続空白・改行の統一
+ * ✓ 記号の揺らぎ統一（・→-、：→:）
+ * ✓ 数値は文字列に統一
+ * 
+ * @param {string} text - 正規化対象のテキスト
+ * @returns {string} 正規化済みテキスト
+ */
+function normalizeTextForCache(text) {
+  if (!text || typeof text !== "string") return "";
+  
+  let normalized = text;
+  
+  // 1. 全角数字を半角に変換
+  normalized = normalized.replace(/[０-９]/g, (char) => {
+    return String.fromCharCode(char.charCodeAt(0) - 0xFEE0);
+  });
+  
+  // 2. 全角アルファベットを半角に変換
+  normalized = normalized.replace(/[Ａ-Ｚａ-ｚ]/g, (char) => {
+    return String.fromCharCode(char.charCodeAt(0) - 0xFEE0);
+  });
+  
+  // 3. 全角スペース → 半角スペース
+  normalized = normalized.replace(/\u3000/g, ' ');
+  
+  // 4. 連続空白を1つに（タブ含む）
+  normalized = normalized.replace(/[ \t]+/g, ' ');
+  
+  // 5. 連続改行を2つ以下に
+  normalized = normalized.replace(/\n{3,}/g, '\n\n');
+  
+  // 6. 記号の揺らぎを統一
+  // ・ → -
+  normalized = normalized.replace(/・/g, '-');
+  // ： → :
+  normalized = normalized.replace(/：/g, ':');
+  // ， → ,
+  normalized = normalized.replace(/，/g, ',');
+  // ． → .
+  normalized = normalized.replace(/．/g, '.');
+  // ？ → ?
+  normalized = normalized.replace(/？/g, '?');
+  //！ → !
+  normalized = normalized.replace(/！/g, '!');
+  
+  // 7. 前後の空白を削除
+  normalized = normalized.trim();
+  
+  // 8. 複数行の空白を整理（行頭行末の空白削除）
+  normalized = normalized.split('\n').map(line => line.trim()).join('\n');
+  
+  // 9. 連続する空行を1つにする
+  normalized = normalized.replace(/\n{3,}/g, '\n\n');
+  
+  return normalized;
+}
+
+/**
+ * JSONオブジェクトのキーをソートして正規化
+ * 構造化データ（表データ等）のキーを常に同じ順序に統一
+ * 
+ * @param {Object} obj - JSONオブジェクト
+ * @returns {string} 正規化されたJSON文字列
+ */
+function normalizeJsonForCache(obj) {
+  if (!obj) return "";
+  
+  try {
+    // キーでソートした新しいオブジェクトを作成
+    const sorted = {};
+    Object.keys(obj).sort().forEach(key => {
+      const value = obj[key];
+      // 数値は文字列に統一（安定性のため）
+      if (typeof value === 'number') {
+        sorted[key] = String(value);
+      } else if (typeof value === 'object' && value !== null) {
+        // ネストされたオブジェクトは再帰的に処理
+        sorted[key] = normalizeJsonForCache(value);
+      } else {
+        sorted[key] = value;
+      }
+    });
+    
+    // キーをソートしたJSONを生成
+    return JSON.stringify(sorted, null, 0);
+  } catch (error) {
+    logWarn("[NORMALIZE:JSON] 正規化エラー:", error.message);
+    return JSON.stringify(obj);
+  }
+}
+
+/**
+ * Embeddingキャッシュ用のテキストを正規化（高位API）
+ * JSONオブジェクトまたは文字列都可以
+ * 
+ * @param {string|Object} input - 正規化対象のテキストまたはJSONオブジェクト
+ * @returns {string} 正規化済みテキスト
+ */
+function normalizeForEmbeddingCache(input) {
+  if (!input) return "";
+  
+  // オブジェクトの場合はJSONとして処理
+  if (typeof input === "object") {
+    // キーをソートして文字列に
+    const sortedJson = normalizeJsonForCache(input);
+    // 自然文に変換（もし可能であれば）
+    const naturalText = convertObjectToNaturalText(input);
+    // 正規化を適用
+    return normalizeTextForCache(naturalText || sortedJson);
+  }
+  
+  // 文字列の場合はそのまま正規化
+  return normalizeTextForCache(String(input));
+}
+
+/**
+ * オブジェクトを自然言語テキストに変換
+ * 表データやJSONオブジェクトを読みやすいテキストに
+ * 
+ * @param {Object} obj - 変換対象のオブジェクト
+ * @returns {string} 自然言語テキスト
+ */
+function convertObjectToNaturalText(obj) {
+  if (!obj || typeof obj !== "object") return String(obj);
+  
+  const lines = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== null && value !== undefined) {
+      lines.push(`${key}: ${value}`);
+    }
+  }
+  return lines.join(', ');
 }
 
 // ================================
@@ -3212,20 +5249,86 @@ function calculateBM25Score(docText, queryKeywords, avgDocLen, docLen, idfScores
 }
 
 /**
- * IDFスコアを事前計算します。
- * 全ドキュメントから逆文書頻度（IDF）を計算します。
+ * IDFスコアをキャッシュから取得、または計算してキャッシュに保存
+ * 検索高速化のため、IDFスコアと平均文書長をキャッシュ
  * 
  * @param {Sheet} sheet - RAGシートオブジェクト
  * @param {Array} keywords - キーワードの配列
  * @returns {Object} IDFスコアオブジェクト
  */
 function computeIDFScores(sheet, keywords) {
+  // キャッシュが有効な場合
+  if (BM25_CACHE_CONFIG.ENABLE_IDF_CACHE) {
+    try {
+      const cache = CacheService.getScriptCache();
+      if (cache) {
+        // シートの行数に基づくキャッシュキーを生成
+        const data = sheet.getDataRange().getValues();
+        const docCount = data.length - 1;
+        const cacheKey = "bm25_idf_" + docCount;
+        
+        // キャッシュからIDFスコアを取得
+        const cached = cache.get(cacheKey);
+        if (cached) {
+          logTrace("[BM25:IDF] IDFキャッシュヒット! docCount:", docCount);
+          const cachedData = JSON.parse(cached);
+          
+          // 平均文書長をキャッシュから取得（もし有効な場合）
+          let avgDocLen = cachedData.avgDocLen;
+          if (!avgDocLen) {
+            let totalLen = 0;
+            for (let i = 1; i < data.length; i++) {
+              totalLen += ((data[i][3] || "").toString().length);
+            }
+            avgDocLen = totalLen / (data.length - 1);
+          }
+          
+          // 必要なキーワードのIDFスコアのみを抽出
+          const idfScores = {};
+          for (const keyword of keywords) {
+            if (cachedData.idfScores[keyword] !== undefined) {
+              idfScores[keyword] = cachedData.idfScores[keyword];
+            } else {
+              // キャッシュにないキーワードは計算
+              const keywordLower = keyword.toLowerCase();
+              let df = 0;
+              for (let i = 1; i < data.length; i++) {
+                const chunk = (data[i][3] || "").toString().toLowerCase();
+                if (chunk.includes(keywordLower)) {
+                  df++;
+                }
+              }
+              if (df > 0) {
+                idfScores[keyword] = Math.log((docCount - df + 0.5) / (df + 0.5) + 1);
+              }
+            }
+          }
+          
+          logTrace("[BM25:IDF] IDFスコア取得完了（キャッシュ使用）:", Object.keys(idfScores).length, "件");
+          return idfScores;
+        }
+      }
+    } catch (e) {
+      logWarn("[BM25:IDF] キャッシュ取得エラー:", e.message);
+    }
+  }
+  
+  // キャッシュがない場合は計算
+  return computeIDFScoresInternal(sheet, keywords);
+}
+
+/**
+ * IDFスコアを内部で計算（キャッシュなし）
+ * 
+ * @param {Sheet} sheet - RAGシートオブジェクト
+ * @param {Array} keywords - キーワードの配列
+ * @returns {Object} IDFスコアオブジェクト
+ */
+function computeIDFScoresInternal(sheet, keywords) {
   const data = sheet.getDataRange().getValues();
   const docCount = data.length - 1;
 
   const idfScores = {};
-  const docFreq = {};
-
   // ヘッダー: FileId(0), FileName(1), MimeType(2), TextChunk(3), Embedding(4), ChunkIndex(5), UpdatedAt(6), CharCount(7), Preview(8), TotalChunks(9), Keywords(10)
   // 各キーワードがいくつの文書に出現するかカウント
   for (const keyword of keywords) {
@@ -3242,6 +5345,33 @@ function computeIDFScores(sheet, keywords) {
     // IDF計算: log((N - df + 0.5) / (df + 0.5))
     if (df > 0) {
       idfScores[keyword] = Math.log((docCount - df + 0.5) / (df + 0.5) + 1);
+    }
+  }
+  // ヘッダー: FileId(0), FileName(1), MimeType(2), TextChunk(3), Embedding(4), ChunkIndex(5), UpdatedAt(6), CharCount(7), Preview(8), TotalChunks(9), Keywords(10)
+  // 結果をキャッシュに保存
+  if (BM25_CACHE_CONFIG.ENABLE_IDF_CACHE) {
+    try {
+      const cache = CacheService.getScriptCache();
+      if (cache) {
+        // 平均文書長を計算
+        let totalLen = 0;
+        for (let i = 1; i < data.length; i++) {
+          totalLen += ((data[i][3] || "").toString().length);
+        }
+        const avgDocLen = totalLen / (data.length - 1);
+        
+        const cacheKey = "bm25_idf_" + docCount;
+        const cacheData = {
+          idfScores: idfScores,
+          avgDocLen: avgDocLen,
+          timestamp: new Date().toISOString()
+        };
+        
+        cache.put(cacheKey, JSON.stringify(cacheData), BM25_CACHE_CONFIG.IDF_CACHE_TTL_SECONDS);
+        logTrace("[BM25:IDF] IDFスコアをキャッシュに保存:", Object.keys(idfScores).length, "件");
+      }
+    } catch (e) {
+      logWarn("[BM25:IDF] キャッシュ保存エラー:", e.message);
     }
   }
 
@@ -5322,11 +7452,6 @@ function buildContextFromResults(results) {
 // ================================
 
 /**
- * Google Driveのファイルを差分インデックス更新
- * 前回更新以降に変更されたファイルのみをインデックスに追加/更新
- * @returns {Object} インデックス更新結果（added, updated, unchanged, totalFiles, lastIndex）
- */
-/**
  * フォルダ内の全ファイルを再帰的に取得（サブフォルダを含む）
  * @param {Folder} folder - 対象フォルダ
  * @param {Array} mimeTypes - 取得するMIMEタイプ配列
@@ -5365,6 +7490,11 @@ function getAllFilesRecursive(folder, mimeTypes, visitedFolders) {
   return allFiles;
 }
 
+/**
+ * Google Driveのファイルを差分インデックス更新
+ * 前回更新以降に変更されたファイルのみをインデックスに追加/更新
+ * @returns {Object} インデックス更新結果（added, updated, unchanged, totalFiles, lastIndex）
+ */
 function incrementalIndexGoogleDrive() {
   console.log("【増量更新】インデックス更新開始: " + new Date());
 
@@ -5462,50 +7592,73 @@ function incrementalIndexGoogleDrive() {
  * @param {string} mimeType - MIMEタイプ
  * @returns {boolean} 成功した場合true
  */
-function indexSingleFile(sheet, file, fileId, fileName, mimeType) {
-  try {
-    const text = extractText(fileId, mimeType, fileName);
+function indexSingleFile(sheet, file, fileId, fileName, mimeType) {        
+    try {
+      // 通常のテキスト抽出
+      const text = extractText(fileId, mimeType, fileName);
 
-    if (!text || text.trim().length === 0) {
-      console.log(`  └ 空ファイルのためスキップ: ${fileName}`);
+      if (!text || text.trim().length === 0) {
+        console.log(`  └ 空ファイルのためスキップ: ${fileName}`);
+        return false;
+      }
+
+      const chunks = splitTextIntoChunks(text);
+      const totalChunks = chunks.length;
+
+      chunks.forEach((chunk, index) => {
+        const embedding = getEmbeddingWithCache(chunk);
+        if (embedding) {
+          // createChunkMetadataを活用してメタデータを生成
+          const metadata = createChunkMetadata(chunk, fileId, fileName, index, totalChunks);
+          // チャンクからキーワードを抽出して追加
+          const keywords = extractKeywords(chunk);
+
+          sheet.appendRow([
+            metadata.fileId,
+            metadata.fileName,
+            mimeType, // MimeType列を追加
+            metadata.text,
+            JSON.stringify(embedding),
+            metadata.chunkIndex,
+            new Date(),
+            metadata.charCount,
+            metadata.preview,
+            metadata.totalChunks,
+            keywords.join(",") // Keywords列に保存
+          ]);
+        }
+        Utilities.sleep(300);
+      });
+
+      console.log(`  └ ${chunks.length} チャンクを追加（メタデータ付与済）`);
+
+      // ===== PDFファイルの表データを追加でインデックスに含める =====
+      // PDF/MIMEタイプまたはPDF拡張子の場合、表構造抽出を試行
+      const isPdf = mimeType === 'application/pdf' || mimeType === MimeType.PDF;
+      
+      if (isPdf) {
+        console.log(`  └ PDFファイルの表データを抽出中: ${fileName}`);
+        
+        try {
+          // extractAndIndexTableDataを使用して表データを抽出・インデックス追加
+          const tableResult = extractAndIndexTableData(fileId, fileName, mimeType);
+          
+          if (tableResult && tableResult.success) {
+            console.log(`  └ 表データ ${tableResult.recordCount} 行を追加（${tableResult.totalChunks} チャンク）`);
+          } else {
+            console.log(`  └ 表データは抽出されませんでした（${fileName}）`);
+          }
+        } catch (tableError) {
+          console.log(`  └ 表データ抽出エラー（致命的ではない）: ${tableError.message}`);
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.error(`  └ エラー: ${fileName}`, error);
       return false;
     }
-
-    const chunks = splitTextIntoChunks(text);
-    const totalChunks = chunks.length;
-
-    chunks.forEach((chunk, index) => {
-      const embedding = getEmbeddingWithCache(chunk);
-      if (embedding) {
-        // createChunkMetadataを活用してメタデータを生成
-        const metadata = createChunkMetadata(chunk, fileId, fileName, index, totalChunks);
-        // チャンクからキーワードを抽出して追加
-        const keywords = extractKeywords(chunk);
-
-        sheet.appendRow([
-          metadata.fileId,
-          metadata.fileName,
-          mimeType, // MimeType列を追加
-          metadata.text,
-          JSON.stringify(embedding),
-          metadata.chunkIndex,
-          new Date(),
-          metadata.charCount,
-          metadata.preview,
-          metadata.totalChunks,
-          keywords.join(",") // Keywords列に保存
-        ]);
-      }
-      Utilities.sleep(300);
-    });
-
-    console.log(`  └ ${chunks.length} チャンクを追加（メタデータ付与済）`);
-    return true;
-  } catch (error) {
-    console.error(`  └ エラー: ${fileName}`, error);
-    return false;
   }
-}
 
 function deleteChunksByFileId(sheet, fileId) {
   try {
