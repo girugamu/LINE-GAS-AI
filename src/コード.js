@@ -121,7 +121,18 @@ const CHUNK_CONFIG = {
   BOOST_HEADERS: true,         // 見出しの重要度ブースト
   BOOST_LISTS: true,           // リスト項目の重要度ブースト
   HEADER_BOOST_FACTOR: 2.0,   // 見出しブースト倍率
-  LIST_BOOST_FACTOR: 1.5       // リストブースト倍率
+  LIST_BOOST_FACTOR: 1.5,       // リストブースト倍率
+
+  // ===== 新機能: 段落復元チャンク化 =====
+  // OCR/PDF抽出結果に対して段落構造を復元し、見出しと本文を結合
+  // 「見出しだけ」「単語だけ」のチャンクを防止
+  USE_PARAGRAPH_RESTORATION: false,  // true: 段落復元モード、false: 従来の文字ベース分割
+  PARAGRAPH_RESTORE_OPTIONS: {
+    preserveStructure: true,   // 見出し階層をrecordに保存
+    minChunkSize: 50,          // 最小チャンクサイズ（段落復元モード）
+    maxChunkSize: 500,          // 最大チャンクサイズ（段落復元モード）
+    targetChunkSize: 300        // 目標チャンクサイズ（段落復元モード）
+  }
 };
 
 // 検索パラメータのデフォルト定義（UserPropertiesで管理）
