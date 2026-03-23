@@ -1,0 +1,282 @@
+{
+  "api_admin": {
+    "file": "api_admin.js",
+    "description": "管理画面APIエンドポイントモジュール",
+    "dependsOn": [
+      "config",
+      "rag_sheet",
+      "triggers",
+      "search"
+    ],
+    "exports": [
+      "getRagStats",
+      "triggerIndexing",
+      "getSettingsData"
+    ]
+  },
+  "api_chat": {
+    "file": "api_chat.js",
+    "description": "チャットAPIエンドポイントモジュール",
+    "dependsOn": [
+      "config",
+      "chat_message",
+      "history",
+      "search",
+      "webapp"
+    ],
+    "exports": [
+      "chatAPI",
+      "handleChatMessage",
+      "handleAgentStart"
+    ]
+  },
+  "auto-dependencies": {
+    "file": "auto-dependencies.js",
+    "description": "自動依存関係マッピング生成スクリプト",
+    "dependsOn": [
+      "dependencies"
+    ],
+    "exports": [
+      "*"
+    ]
+  },
+  "cache": {
+    "file": "cache.js",
+    "description": "クエリ・Embeddingキャッシュ管理モジュール",
+    "dependsOn": [
+      "config"
+    ],
+    "exports": [
+      "getQueryCache",
+      "setQueryCache",
+      "clearAllQueryCaches",
+      "clearEmbeddingCache",
+      "findSimilarQueryCache"
+    ]
+  },
+  "chat_message": {
+    "file": "chat_message.js",
+    "description": "LINEメッセージ送信モジュール",
+    "dependsOn": [
+      "config",
+      "history",
+      "search",
+      "llm"
+    ],
+    "exports": [
+      "sendMessage",
+      "sendLineLoading",
+      "callChatGPTWithRAGEnhanced",
+      "callChatGPTWithAgent",
+      "buildChatMessages"
+    ]
+  },
+  "chunk": {
+    "file": "chunk.js",
+    "description": "テキストのチャンク分割処理モジュール",
+    "dependsOn": [
+      "config"
+    ],
+    "exports": [
+      "splitTextIntoChunks",
+      "semanticSplit",
+      "basicSplit",
+      "splitLongChunkOnly",
+      "mergeSmallChunks",
+      "deduplicateChunks"
+    ]
+  },
+  "config": {
+    "file": "config.js",
+    "description": "設定・定数・ログ関数モジュール",
+    "dependsOn": [
+      "(なし - 基本モジュール)"
+    ],
+    "exports": [
+      "scriptProps",
+      "userProps",
+      "LOG_SHEET_ID",
+      "PROMPT_TEMPLATES",
+      "logInfo",
+      "logError",
+      "logWarn",
+      "logTrace",
+      "cosineSimilarity",
+      "hashUserId",
+      "isDebugModeEnabled"
+    ]
+  },
+  "dependencies": {
+    "file": "dependencies.js",
+    "description": "依存関係マップモジュール",
+    "dependsOn": [
+      "(なし - 自己完結型ユーティリティ)"
+    ],
+    "exports": [
+      "MODULE_DEFINITIONS",
+      "resolveDependencyOrder",
+      "exportDependencyGraphAsDot",
+      "findFunctionModule",
+      "getModuleDependencies",
+      "detectCircularDependencies",
+      "printDependencyReport",
+      "buildFunctionIndex"
+    ]
+  },
+  "embedding": {
+    "file": "embedding.js",
+    "description": "OpenAI Embedding API呼び出しモジュール",
+    "dependsOn": [
+      "config",
+      "cache"
+    ],
+    "exports": [
+      "getEmbedding",
+      "getEmbeddingWithCache"
+    ]
+  },
+  "extract": {
+    "file": "extract.js",
+    "description": "各種ファイル形式からのテキスト抽出モジュール",
+    "dependsOn": [
+      "config",
+      "chunk"
+    ],
+    "exports": [
+      "extractText",
+      "extractTextFromGoogleSheets",
+      "extractTextFromWord",
+      "extractTextFromPDFWithOCR",
+      "extractTableWithStructure"
+    ]
+  },
+  "history": {
+    "file": "history.js",
+    "description": "会話履歴管理モジュール（CacheService使用）",
+    "dependsOn": [
+      "config",
+      "cache"
+    ],
+    "exports": [
+      "getHistory",
+      "saveHistory",
+      "clearHistory"
+    ]
+  },
+  "llm": {
+    "file": "llm.js",
+    "description": "LLM（Large Language Model）呼び出しモジュール",
+    "dependsOn": [
+      "config"
+    ],
+    "exports": [
+      "callChatGPT",
+      "callChatGPTRerank",
+      "getLlmParams",
+      "getLlmParamsDefault",
+      "updateLlmParam",
+      "supportsTopK",
+      "generateFullPrompt",
+      "getAdminPrompt",
+      "getUserPrompt",
+      "getPromptTemplateSettings",
+      "updatePromptTemplate",
+      "buildPromptFromTemplate",
+      "getAdminPromptSettings",
+      "getUserPromptSettings",
+      "getSearchParams",
+      "getSearchParamsDefault",
+      "updateSearchParam"
+    ]
+  },
+  "preprocess": {
+    "file": "preprocess.js",
+    "description": "プリプロセス（テキスト前処理・チャンク化）モジュール",
+    "dependsOn": [
+      "config",
+      "chunk",
+      "embedding",
+      "rag_sheet",
+      "extract"
+    ],
+    "exports": [
+      "restoreParagraphs",
+      "processTextForRag",
+      "processAndIndexWithParagraphRestoration",
+      "PARAGRAPH_CHUNK_CONFIG"
+    ]
+  },
+  "rag_sheet": {
+    "file": "rag_sheet.js",
+    "description": "RAGインデックス用スプレッドシート操作モジュール",
+    "dependsOn": [
+      "config",
+      "chunk",
+      "embedding"
+    ],
+    "exports": [
+      "getRagSheet",
+      "incrementalIndexGoogleDrive",
+      "getFileMapping",
+      "setFileMapping",
+      "getLastIndexTime"
+    ]
+  },
+  "rerank": {
+    "file": "rerank.js",
+    "description": "検索結果のリランキングモジュール",
+    "dependsOn": [
+      "config",
+      "llm"
+    ],
+    "exports": [
+      "rerankResults"
+    ]
+  },
+  "search": {
+    "file": "search.js",
+    "description": "ベクトル検索・キーワード検索・BM25モジュール",
+    "dependsOn": [
+      "config",
+      "cache",
+      "embedding",
+      "rag_sheet"
+    ],
+    "exports": [
+      "hybridSearch",
+      "enhancedHybridSearch",
+      "searchByKeywords",
+      "searchRelevantDocumentsVector",
+      "expandQuery",
+      "fetchRelevantChunks"
+    ]
+  },
+  "triggers": {
+    "file": "triggers.js",
+    "description": "自動インデックス更新トリガーモジュール",
+    "dependsOn": [
+      "config",
+      "rag_sheet"
+    ],
+    "exports": [
+      "setupAutoIndexTrigger",
+      "removeAutoIndexTrigger",
+      "initIncrementalIndex",
+      "triggerManualIndexUpdate"
+    ]
+  },
+  "webapp": {
+    "file": "webapp.js",
+    "description": "Web Apps認証・HTML出力モジュール",
+    "dependsOn": [
+      "config"
+    ],
+    "exports": [
+      "checkAdminAuth",
+      "checkChatUserAuth",
+      "createAuthErrorHtml",
+      "getAllowList",
+      "isDevModeEnabled"
+    ]
+  }
+}

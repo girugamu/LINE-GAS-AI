@@ -32,7 +32,8 @@ function getRagStats() {
     const chunkCount = data.length - 1;
     const fileIds = new Set();
     for (let i = 1; i < data.length; i++) {
-      const fileId = data[i][0];
+      // INDEX_SCHEMAを使って列にアクセス
+      const fileId = data[i][INDEX_SCHEMA.FILE_ID];
       if (fileId) {
         fileIds.add(fileId);
       }
@@ -72,10 +73,11 @@ function getIndexedFiles() {
 
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      const fileId = row[0];
-      const fileName = row[1];
-      const mimeType = row[2];
-      const updatedAt = row[5];
+      // INDEX_SCHEMAを使って列にアクセス
+      const fileId = row[INDEX_SCHEMA.FILE_ID];
+      const fileName = row[INDEX_SCHEMA.FILE_NAME];
+      const mimeType = row[INDEX_SCHEMA.MIME_TYPE];
+      const updatedAt = row[INDEX_SCHEMA.UPDATED_AT];
 
       if (!fileInfo[fileId]) {
         fileInfo[fileId] = {
@@ -112,18 +114,19 @@ function getIndexedChunks(fileId) {
 
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      const rowFileId = row[0];
+      // INDEX_SCHEMAを使って列にアクセス
+      const rowFileId = row[INDEX_SCHEMA.FILE_ID];
 
       if (rowFileId === fileId) {
         chunks.push({
-          fileId: row[0],
-          fileName: row[1],
-          mimeType: row[2],
-          textChunk: row[3],
-          chunkIndex: row[5],
-          charCount: row[7],
-          preview: row[8],
-          totalChunks: row[9]
+          fileId: row[INDEX_SCHEMA.FILE_ID],
+          fileName: row[INDEX_SCHEMA.FILE_NAME],
+          mimeType: row[INDEX_SCHEMA.MIME_TYPE],
+          textChunk: row[INDEX_SCHEMA.TEXT_CHUNK],
+          chunkIndex: row[INDEX_SCHEMA.CHUNK_INDEX],
+          charCount: row[INDEX_SCHEMA.CHAR_COUNT],
+          preview: row[INDEX_SCHEMA.PREVIEW],
+          totalChunks: row[INDEX_SCHEMA.TOTAL_CHUNKS]
         });
       }
     }
