@@ -710,7 +710,7 @@
         setTimeout(() => {
           progressCard.style.display = 'none';
         }, 3000);
-      }, 30000);
+      }, 360000);  // 6分（360秒）
       
       google.script.run
         .withSuccessHandler(function(result) {
@@ -920,7 +920,8 @@
               <span class="mime-type-tree">${mimeTypeLabel}</span>
               <span class="file-size-tree">${fileSize}</span>
               <span class="file-date-tree">${updatedAt}</span>
-              <button class="btn-small" onclick="deleteUploadedFile('${item.id}', '${escapeHtml(item.name)}')">🗑️</button>
+              <button class="btn-small" onclick="downloadFile('${item.id}', '${escapeHtml(item.name)}')">⬇️</button>
+              <button class="btn-small danger" onclick="deleteUploadedFile('${item.id}', '${escapeHtml(item.name)}')">🗑️</button>
             </div>
           </div>
         `;
@@ -941,6 +942,27 @@
           if (toggle) toggle.textContent = '▼';
         }
       }
+    }
+    
+    // ファイルをダウンロード
+    function downloadFile(fileId, fileName) {
+      setStatus('ダウンロードURLを取得中...', 'loading');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          console.log('【ダウンロード】', result);
+          if (result.success) {
+            setStatus('ダウンロード準備完了', 'success');
+            // 新しいタブでダウンロードURLを開く
+            window.open(result.downloadUrl, '_blank');
+          } else {
+            showError('ダウンロードURLの取得に失敗しました: ' + result.error);
+          }
+        })
+        .withFailureHandler(function(error) {
+          showError('ダウンロードに失敗しました: ' + error.message);
+        })
+        .getFileDownloadUrl(fileId);
     }
     
     // ファイルサイズをフォーマット

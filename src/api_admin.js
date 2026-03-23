@@ -291,6 +291,50 @@ function getFolderTreeRecursive(folder, visitedFolders, depth = 0) {
 }
 
 /**
+ * ファイルのダウンロードURLを取得
+ */
+function getFileDownloadUrl(fileId) {
+  try {
+    if (!fileId) {
+      return { success: false, error: 'fileIdが指定されていません' };
+    }
+
+    const file = DriveApp.getFileById(fileId);
+    const mimeType = file.getMimeType();
+    const fileName = file.getName();
+
+    // Google Docs/Sheets/Presentation の場合はエクスポート形式が必要
+    let downloadUrl = '';
+    
+    if (mimeType === 'application/vnd.google-apps.document') {
+      // Google Docs は DOCX でエクスポート
+      downloadUrl = `https://docs.google.com/document/d/${fileId}/export?format=docx`;
+    } else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
+      // Google Sheets は XLSX でエクスポート
+      downloadUrl = `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx`;
+    } else if (mimeType === 'application/vnd.google-apps.presentation') {
+      // Google Slides は PPTX でエクスポート
+      downloadUrl = `https://docs.google.com/presentation/d/${fileId}/export?format=pptx`;
+    } else {
+      // その他のファイルは直接ダウンロード
+      downloadUrl = `https://drive.google.com/uc?id=${fileId}&export=download`;
+    }
+
+    logInfo('[getFileDownloadUrl] ダウンロードURL取得完了:', fileName, 'FileId:', fileId);
+
+    return {
+      success: true,
+      fileName: fileName,
+      downloadUrl: downloadUrl,
+      webViewUrl: file.getUrl()
+    };
+  } catch (error) {
+    logError('[getFileDownloadUrl] エラー:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * アップロードされたファイルを削除
  */
 function deleteUploadedFile(fileId) {
