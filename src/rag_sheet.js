@@ -1,11 +1,19 @@
 /**
- * RAG シート管理モジュール
+ * RAGインデックス用スプレッドシート操作モジュール
+ * 
+ * @module rag_sheet
+ * @description RAGインデックス用スプレッドシート操作
  * 
  * このファイルには以下が含まれています：
  * - getRagSheet: RAG用スプレッドシート取得
  * - resetAndInitializeRagSheet: シート初期化
  * - setFileMapping/getFileMapping: ファイルマッピング管理
  * - getLastIndexTime/setLastIndexTime: 最終インデックス時刻管理
+ * - incrementalIndexGoogleDrive: 差分インデックス更新
+ * - PDF表データ抽出・インデックス機能
+ * 
+ * @depends config, chunk, embedding
+ * @exports getRagSheet, incrementalIndexGoogleDrive, getFileMapping, setFileMapping, getLastIndexTime
  */
 
 /**

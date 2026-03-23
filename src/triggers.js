@@ -1,11 +1,17 @@
 /**
- * トリガー管理モジュール
+ * 自動インデックス更新トリガーモジュール
+ * 
+ * @module triggers
+ * @description 自動インデックス更新トリガー
  * 
  * このファイルには以下が含まれています：
  * - setupAutoIndexTrigger: 自動インデックストリガー設定
  * - removeAutoIndexTrigger: 自動インデックストリガー解除
  * - initIncrementalIndex: 初期インデックス実行
  * - triggerManualIndexUpdate: 手動インデックス更新
+ * 
+ * @depends config, rag_sheet
+ * @exports setupAutoIndexTrigger, removeAutoIndexTrigger, initIncrementalIndex, triggerManualIndexUpdate
  */
 
 /**

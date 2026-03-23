@@ -1,11 +1,18 @@
 /**
- * キャッシュ管理モジュール
+ * クエリ・Embeddingキャッシュ管理モジュール
+ * 
+ * @module cache
+ * @description クエリ・Embeddingキャッシュ管理
  * 
  * このファイルには以下が含まれています：
  * - ユーザー別の結果キャッシュ（クエリ結果の保存・取得）
  * - 類似度ベースのキャッシュ検索
  * - キャッシュキーのレジストリ管理
  * - Embeddingキャッシュ
+ * - テキスト正規化関数群
+ * 
+ * @depends config
+ * @exports getQueryCache, setQueryCache, clearAllQueryCaches, clearEmbeddingCache, findSimilarQueryCache
  */
 
 // ================================

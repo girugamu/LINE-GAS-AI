@@ -1,9 +1,15 @@
 /**
- * 会話履歴管理モジュール
+ * 会話履歴管理モジュール（CacheService使用）
+ * 
+ * @module history
+ * @description 会話履歴管理
  * 
  * このファイルには以下が含まれています：
  * - ユーザーごとの会話履歴取得
  * - ユーザーごとの会話履歴保存
+ * 
+ * @depends config, cache
+ * @exports getHistory, saveHistory, clearHistory
  */
 
 /**

@@ -1,5 +1,8 @@
 /**
- * 設定・定数・ログ設定
+ * 設定・定数・ログ関数モジュール
+ * 
+ * @module config
+ * @description 設定・定数・ログ出力関数
  * 
  * このファイルには以下が含まれています：
  * - スクリプトプロパティ・ユーザープロパティ
@@ -16,6 +19,9 @@
  * - 設定項目定義
  * - ログ出力関数
  * - ユーティリティ関数
+ * 
+ * @depends (なし - 基本モジュール)
+ * @exports scriptProps, userProps, LOG_SHEET_ID, PROMPT_TEMPLATES, logInfo, logError, logWarn, logTrace, cosineSimilarity, hashUserId, isDebugModeEnabled
  */
 
 // ================================

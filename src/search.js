@@ -1,5 +1,8 @@
 /**
- * 検索モジュール
+ * ベクトル検索・キーワード検索・BM25モジュール
+ * 
+ * @module search
+ * @description ベクトル検索・キーワード検索・BM25
  * 
  * このファイルには以下が含まれています：
  * - expandQuery: 辞書ベースクエリ拡張
@@ -9,6 +12,9 @@
  * - ベクトル検索（searchRelevantDocumentsVector）
  * - ハイブリッド検索（hybridSearch, enhancedHybridSearch, combineResults）
  * - チャンク取得（fetchRelevantChunks）
+ * 
+ * @depends config, cache, embedding, rag_sheet
+ * @exports hybridSearch, enhancedHybridSearch, searchByKeywords, searchRelevantDocumentsVector, expandQuery, fetchRelevantChunks
  */
 
 /**

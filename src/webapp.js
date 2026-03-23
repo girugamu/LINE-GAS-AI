@@ -1,5 +1,8 @@
 /**
- * Web Apps エントリーポイントモジュール
+ * Web Apps認証・HTML出力モジュール
+ * 
+ * @module webapp
+ * @description Web Apps認証・HTML出力
  * 
  * このファイルには以下が含まれています：
  * - doGet: Web Appsのメインエントリーポイント
@@ -8,6 +11,9 @@
  * - 認証エラーHTML生成
  * - HTMLテンプレート読み込み関数
  * - Web Apps URL取得
+ * 
+ * @depends config
+ * @exports checkAdminAuth, checkChatUserAuth, createAuthErrorHtml, getAllowList, isDevModeEnabled
  */
 
 /**

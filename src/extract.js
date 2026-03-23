@@ -1,5 +1,8 @@
 /**
- * テキスト抽出モジュール
+ * 各種ファイル形式からのテキスト抽出モジュール
+ * 
+ * @module extract
+ * @description 各種ファイル形式からのテキスト抽出
  * 
  * このファイルには以下が含まれています：
  * - extractText: 様々なMimeTypeのファイルからテキストを抽出
@@ -7,6 +10,9 @@
  * - Vision API OCR関数
  * - 表構造復元関数群
  * - BoundingBox解析ユーティリティ
+ * 
+ * @depends config, chunk
+ * @exports extractText, extractTextFromGoogleSheets, extractTextFromWord, extractTextFromPDFWithOCR, extractTableWithStructure
  */
 
 /**

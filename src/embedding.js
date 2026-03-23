@@ -1,9 +1,15 @@
 /**
- * Embeddingモジュール
+ * OpenAI Embedding API呼び出しモジュール
+ * 
+ * @module embedding
+ * @description OpenAI Embedding API呼び出し
  * 
  * このファイルには以下が含まれています：
  * - getEmbedding: OpenAI Embedding API呼び出し
  * - getEmbeddingWithCache: キャッシュ付きEmbedding取得
+ * 
+ * @depends config, cache
+ * @exports getEmbedding, getEmbeddingWithCache
  */
 
 // ================================

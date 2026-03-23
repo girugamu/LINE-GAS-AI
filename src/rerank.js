@@ -1,10 +1,17 @@
 /**
- * リランキングモジュール
+ * 検索結果のリランキングモジュール
+ * 
+ * @module rerank
+ * @description 検索結果のリランキング
  * 
  * このファイルには以下が含まれています：
  * - rerankResults: LLMを使用して検索結果をリランキング
  * - buildRerankPrompt: リランキング用プロンプト生成
  * - parseRerankResponse: LLMレスポンスからスコアをパース
+ * - callChatGPTRerank: リランキング用ChatGPT API呼び出し
+ * 
+ * @depends config, chat_message
+ * @exports rerankResults, callChatGPTRerank
  */
 
 /**

@@ -1,10 +1,20 @@
 /**
- * 管理画面APIモジュール
+ * 管理画面APIエンドポイントモジュール
+ * 
+ * @module api_admin
+ * @description 管理画面APIエンドポイント
  * 
  * このファイルには以下が含まれています：
  * - RAG管理画面用API（getRagStats, getIndexedFiles, getIndexedChunks）
  * - 設定画面用API（getSettingsData, updateSetting）
  * - ログ取得画面用API（getLogs, getNewLogs）
+ * - ファイルアップロード・削除機能
+ * - フォルダツリー取得機能
+ * - プロパティのインポート・エクスポート機能
+ * - LLM/検索パラメータ取得・更新機能
+ * 
+ * @depends config, rag_sheet, triggers, search
+ * @exports getRagStats, triggerIndexing, getSettingsData
  */
 
 /**

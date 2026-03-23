@@ -1,5 +1,8 @@
 /**
- * WebチャットAPIモジュール
+ * チャットAPIエンドポイントモジュール
+ * 
+ * @module api_chat
+ * @description チャットAPIエンドポイント
  * 
  * このファイルには以下が含まれています：
  * - chatAPI: WebチャットAPIエントリーポイント
@@ -8,6 +11,10 @@
  * - handleGetHistory: 履歴取得処理
  * - handleExportHistory: 履歴エクスポート処理
  * - handleAgentStart/handleAgentContinue: エージェントモード処理
+ * - ファイルアップロード・テキスト抽出機能
+ * 
+ * @depends config, chat_message, history, search, webapp
+ * @exports chatAPI, handleChatMessage, handleAgentStart
  */
 
 /**

@@ -1,5 +1,8 @@
 /**
- * チャンク分割モジュール
+ * テキストのチャンク分割処理モジュール
+ * 
+ * @module chunk
+ * @description テキストのチャンク分割処理
  * 
  * このファイルには以下が含まれています：
  * - splitTextIntoChunks: セマンティックチャンク分割
@@ -7,6 +10,9 @@
  * - analyzeTextStructure: テキスト構造解析
  * - semanticSplit: セマンティック分割
  * - postProcessChunks: チャンク後処理
+ * 
+ * @depends config
+ * @exports splitTextIntoChunks, semanticSplit, basicSplit, splitLongChunkOnly, mergeSmallChunks, deduplicateChunks
  */
 
 /**

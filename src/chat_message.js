@@ -1,11 +1,21 @@
 /**
- * AI Chat メイン処理モジュール
+ * LINEメッセージ送信モジュール
+ * 
+ * @module chat_message
+ * @description LINEメッセージ送信、自律検索エージェントモード
  * 
  * このファイルには以下が含まれています：
  * - LINE API返信関数
  * - LINE Loading API関数
  * - doPost: LINE Webhook処理
  * - LINEコマンド処理（履歴削除、インデックス情報表示など）
+ * - RAG拡張版ChatGPT呼び出し
+ * - 自律検索エージェントモード
+ * 
+ * 注意：ChatGPT API呼び出し、LLMパラメータ管理、プロンプト生成はllm.jsに分離されました
+ * 
+ * @depends config, history, search, llm
+ * @exports sendMessage, sendLineLoading, callChatGPTWithRAGEnhanced, callChatGPTWithAgent, buildChatMessages
  */
 
 /**
@@ -75,386 +85,21 @@ function sendLineLoading(userId) {
 }
 
 // ================================
-//  ChatGPT API 呼び出し
+//  RAG拡張機能付き ChatGPT（LLM関数を使用）
 // ================================
 
 /**
- * OpenAI ChatGPT APIを呼び出して応答を取得
+ * ChatGPT API用のメッセージ配列を構築
  */
-function callChatGPT(messages, overrideTemperature) {
-  try {
-    const llmParams = getLlmParams();
-    const temperature = (overrideTemperature !== undefined) ? overrideTemperature : llmParams.temperature;
-
-    const currentModel = llmParams.model || GPT_MODEL;
-    const payload = {
-      model: currentModel,
-      messages: messages,
-      temperature: temperature
-    };
-
-    if (llmParams.top_p !== undefined && llmParams.top_p !== null) {
-      payload.top_p = llmParams.top_p;
-    }
-
-    if (supportsTopK(currentModel) && llmParams.top_k !== undefined && llmParams.top_k !== null) {
-      payload.top_k = llmParams.top_k;
-    }
-
-    if (llmParams.max_tokens !== undefined && llmParams.max_tokens !== null) {
-      if (currentModel.startsWith('gpt-5.')) {
-        payload.max_completion_tokens = llmParams.max_tokens;
-      } else {
-        payload.max_tokens = llmParams.max_tokens;
-      }
-    }
-
-    if (currentModel.startsWith('gpt-5.')) {
-      if (llmParams.max_prompt_tokens !== undefined && llmParams.max_prompt_tokens !== null) {
-        const maxPromptTokens = parseInt(llmParams.max_prompt_tokens);
-        if (!isNaN(maxPromptTokens) && maxPromptTokens > 0) {
-          payload.max_prompt_tokens = maxPromptTokens;
-        }
-      }
-    }
-
-    if (llmParams.presence_penalty !== undefined && llmParams.presence_penalty !== null) {
-      payload.presence_penalty = llmParams.presence_penalty;
-    }
-
-    if (llmParams.frequency_penalty !== undefined && llmParams.frequency_penalty !== null) {
-      payload.frequency_penalty = llmParams.frequency_penalty;
-    }
-
-    if (llmParams.stop && llmParams.stop.trim() !== '') {
-      payload.stop = llmParams.stop.split(',').map(s => s.trim()).filter(s => s);
-    }
-
-    if (llmParams.response_format === 'json') {
-      payload.response_format = { type: "json_object" };
-    }
-
-    logTrace("[GPT_PARAMS] 使用パラメータ:", JSON.stringify(payload));
-
-    const response = UrlFetchApp.fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "post",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + OPENAI_API_KEY
-        },
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: false
-      }
-    );
-
-    const responseCode = response.getResponseCode();
-    const responseText = response.getContentText();
-
-    if (responseCode !== 200) {
-      logError("OpenAI API エラー: ステータスコード " + responseCode, responseText);
-      return "すみません、処理中にエラーが発生しました。";
-    }
-
-    const json = JSON.parse(responseText);
-    return json.choices[0].message.content.trim();
-
-  } catch (error) {
-    logError("OpenAI API エラー:", error);
-    return "すみません、処理中にエラーが発生しました。";
+function buildChatMessages(promptResult, userMessage) {
+  const messages = [];
+  messages.push({ role: "system", content: promptResult.system });
+  messages.push({ role: "user", content: promptResult.user });
+  if (userMessage && userMessage.length > 0) {
+    userMessage.forEach(msg => messages.push(msg));
   }
+  return messages;
 }
-
-// ================================
-//  プロンプト管理関数
-// ================================
-
-/**
- * 管理者プロンプトを取得（ScriptProperties）
- */
-function getAdminPrompt() {
-  try {
-    const parts = [];
-    const systemPrompt = scriptProps.getProperty("ADMIN_SYSTEM_PROMPT");
-    if (systemPrompt && systemPrompt.trim() !== "") {
-      parts.push(systemPrompt.trim());
-    }
-    const responseRules = scriptProps.getProperty("ADMIN_RESPONSE_RULES");
-    if (responseRules && responseRules.trim() !== "") {
-      parts.push("【応答ルール】\n" + responseRules.trim());
-    }
-    const forbiddenTopics = scriptProps.getProperty("ADMIN_FORBIDDEN_TOPICS");
-    if (forbiddenTopics && forbiddenTopics.trim() !== "") {
-      parts.push("【注意】以下のトピックには言及しないでください：" + forbiddenTopics.trim());
-    }
-    return parts.join("\n\n");
-  } catch (error) {
-    logError("[getAdminPrompt] エラー:", error);
-    return "";
-  }
-}
-
-/**
- * ユーザー独自プロンプトを取得（UserProperties）
- */
-function getUserPrompt() {
-  try {
-    const userProps = PropertiesService.getUserProperties();
-    const parts = [];
-    const customPrompt = userProps.getProperty("USER_CUSTOM_PROMPT");
-    if (customPrompt && customPrompt.trim() !== "") {
-      parts.push("【ユーザー設定】\n" + customPrompt.trim());
-    }
-    const userPersona = userProps.getProperty("USER_PERSONA");
-    if (userPersona && userPersona.trim() !== "") {
-      parts.push("【ユーザーの特徴】\n" + userPersona.trim());
-    }
-    const responseStyle = userProps.getProperty("USER_RESPONSE_STYLE");
-    if (responseStyle && responseStyle.trim() !== "") {
-      parts.push("【応答スタイル】\n" + responseStyle.trim());
-    }
-    return parts.join("\n\n");
-  } catch (error) {
-    logError("[getUserPrompt] エラー:", error);
-    return "";
-  }
-}
-
-/**
- * プロンプトテンプレートをScriptPropertiesから取得
- */
-function getPromptTemplateSettings() {
-  try {
-    const settings = {};
-    for (const [key, def] of Object.entries(PROMPT_TEMPLATE_DEFINITIONS)) {
-      let value = scriptProps.getProperty(key);
-      if (value === null || value === undefined || value === "") {
-        value = def.defaultValue;
-        if (value) scriptProps.setProperty(key, value);
-      }
-      settings[key] = value || "";
-    }
-    return { success: true, settings: settings, definitions: PROMPT_TEMPLATE_DEFINITIONS };
-  } catch (error) {
-    logError('[getPromptTemplateSettings] エラー:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-/**
- * プロンプトテンプレートを更新
- */
-function updatePromptTemplate(key, value) {
-  try {
-    const allowedKeys = Object.keys(PROMPT_TEMPLATE_DEFINITIONS);
-    if (!allowedKeys.includes(key)) {
-      return { success: false, error: '許可されていないキーです: ' + key };
-    }
-    scriptProps.setProperty(key, value);
-    logInfo('[updatePromptTemplate] プロンプトテンプレートを更新:', key);
-    return { success: true, key: key, value: value };
-  } catch (error) {
-    logError('[updatePromptTemplate] エラー:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-/**
- * プロンプトテンプレートからプロンプトを生成
- */
-function buildPromptFromTemplate(templateKey, variables) {
-  try {
-    let template = scriptProps.getProperty(templateKey);
-    if (!template || template.trim() === "") {
-      const def = PROMPT_TEMPLATE_DEFINITIONS[templateKey];
-      template = def ? def.defaultValue : "";
-    }
-    if (variables) {
-      for (const [key, value] of Object.entries(variables)) {
-        const placeholder = '{{' + key + '}}';
-        template = template.split(placeholder).join(value);
-      }
-    }
-    return template;
-  } catch (error) {
-    logError('[buildPromptFromTemplate] エラー:', error);
-    const def = PROMPT_TEMPLATE_DEFINITIONS[templateKey];
-    return def ? def.defaultValue : "";
-  }
-}
-
-/**
- * 管理者プロンプトの全設定を取得
- */
-function getAdminPromptSettings() {
-  try {
-    const settings = {};
-    for (const [key, def] of Object.entries(ADMIN_PROMPT_DEFINITIONS)) {
-      let value = scriptProps.getProperty(key);
-      if (value === null || value === undefined || value === "") {
-        value = def.defaultValue;
-        if (value) scriptProps.setProperty(key, value);
-      }
-      settings[key] = value || "";
-    }
-    return { success: true, settings: settings, definitions: ADMIN_PROMPT_DEFINITIONS };
-  } catch (error) {
-    logError('[getAdminPromptSettings] エラー:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-/**
- * ユーザー独自プロンプトの全設定を取得
- */
-function getUserPromptSettings() {
-  try {
-    const userProps = PropertiesService.getUserProperties();
-    const settings = {};
-    for (const [key, def] of Object.entries(USER_PROMPT_DEFINITIONS)) {
-      let value = userProps.getProperty(key);
-      if (value === null || value === undefined || value === "") {
-        value = def.defaultValue;
-        if (value) userProps.setProperty(key, value);
-      }
-      settings[key] = value || "";
-    }
-    return { success: true, settings: settings, definitions: USER_PROMPT_DEFINITIONS };
-  } catch (error) {
-    logError('[getUserPromptSettings] エラー:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-/**
- * プロンプトを生成（優先順位: 管理者 → ユーザー → RAGコンテキスト）
- */
-function generateFullPrompt(ragContext) {
-  const baseSystemPrompt = "あなたはAIアシスタントです。";
-  const adminPrompt = getAdminPrompt();
-  const userPrompt = getUserPrompt();
-  const systemParts = [baseSystemPrompt];
-  const userParts = [];
-
-  if (adminPrompt && adminPrompt.trim() !== "") {
-    systemParts.push(adminPrompt);
-  }
-  const combinedSystem = systemParts.filter(p => p && p.trim() !== "").join("\n\n");
-
-  if (userPrompt && userPrompt.trim() !== "") {
-    userParts.push(userPrompt.trim());
-  }
-  if (ragContext && ragContext.trim() !== "") {
-    userParts.push("【コンテキスト】\n" + ragContext.trim());
-  }
-  const combinedUser = userParts.filter(p => p && p.trim() !== "").join("\n\n");
-
-  return {
-    system: combinedSystem,
-    user: combinedUser,
-    hasAdminPrompt: adminPrompt.trim() !== "",
-    hasUserPrompt: userPrompt.trim() !== "",
-    hasRagContext: ragContext && ragContext.trim() !== ""
-  };
-}
-
-// ================================
-//  LLMパラメータ関連関数
-// ================================
-
-function supportsTopK(model) {
-  return !MODELS_WITHOUT_TOP_K.includes(model);
-}
-
-function getLlmParams() {
-  try {
-    const getSettings = (defs, props, transform) => {
-      const result = {};
-      for (const [k, def] of Object.entries(defs)) {
-        let v = props.getProperty(k);
-        if (v === null || v === undefined || v === '') { v = def.defaultValue; props.setProperty(k, v); }
-        result[def.paramName || k] = transform(v, def);
-      }
-      return result;
-    };
-    
-    return getSettings(LLM_PARAM_DEFINITIONS, userProps, (v, def) => {
-      if (def.isString || def.isSelect) return v;
-      const n = parseFloat(v);
-      return isNaN(n) ? 0 : n;
-    });
-  } catch (e) {
-    const d = {};
-    for (const [k, def] of Object.entries(LLM_PARAM_DEFINITIONS)) {
-      d[def.paramName] = (def.isString || def.isSelect) ? def.defaultValue : parseFloat(def.defaultValue);
-    }
-    return d;
-  }
-}
-
-function getLlmParamsDefault() {
-  const d = {};
-  for (const [k, def] of Object.entries(LLM_PARAM_DEFINITIONS)) {
-    d[def.paramName] = (def.isString || def.isSelect) ? def.defaultValue : parseFloat(def.defaultValue);
-  }
-  return d;
-}
-
-function updateLlmParam(k, v) {
-  try {
-    if (!Object.keys(LLM_PARAM_DEFINITIONS).includes(k)) return { success: false, error: '許可されていないキー' };
-    const def = LLM_PARAM_DEFINITIONS[k];
-    if (def.isBoolean) {
-      userProps.setProperty(k, String(v));
-    } else if (!def.isString && !def.isSelect && v) {
-      const n = parseFloat(v);
-      if (isNaN(n) || n < def.min || n > def.max) return { success: false, error: `${def.min}〜${def.max}` };
-    }
-    userProps.setProperty(k, String(v));
-    logInfo('[updateLlmParam]', k, v);
-    return { success: true, key: k, value: v };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-}
-
-function getSearchParams() {
-  try {
-    const result = {};
-    for (const [k, def] of Object.entries(SEARCH_PARAM_DEFINITIONS)) {
-      let v = userProps.getProperty(k);
-      if (v === null || v === undefined || v === '') { v = def.defaultValue; userProps.setProperty(k, v); }
-      result[k] = def.isBoolean ? v !== 'false' : v;
-    }
-    return result;
-  } catch (e) {
-    const d = {};
-    for (const [k, def] of Object.entries(SEARCH_PARAM_DEFINITIONS)) d[k] = def.defaultValue !== 'false';
-    return d;
-  }
-}
-
-function getSearchParamsDefault() {
-  const d = {};
-  for (const [k, def] of Object.entries(SEARCH_PARAM_DEFINITIONS)) d[k] = def.defaultValue !== 'false';
-  return d;
-}
-
-function updateSearchParam(k, v) {
-  try {
-    if (!Object.keys(SEARCH_PARAM_DEFINITIONS).includes(k)) return { success: false, error: '許可されていないキー' };
-    userProps.setProperty(k, String(v));
-    logInfo('[updateSearchParam]', k, v);
-    return { success: true, key: k, value: v };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-}
-
-// ================================
-//  RAG拡張機能付き ChatGPT
-// ================================
 
 /**
  * RAG拡張版ChatGPT呼び出し
@@ -637,19 +282,6 @@ function callChatGPTWithRAGEnhanced(userMessage, history, userId, additionalCont
 // 後方互換性のための旧関数
 function callChatGPTWithRAG(userMessage, history) {
   return callChatGPTWithRAGEnhanced(userMessage, history);
-}
-
-/**
- * ChatGPT API用のメッセージ配列を構築
- */
-function buildChatMessages(promptResult, userMessage) {
-  const messages = [];
-  messages.push({ role: "system", content: promptResult.system });
-  messages.push({ role: "user", content: promptResult.user });
-  if (userMessage && userMessage.length > 0) {
-    userMessage.forEach(msg => messages.push(msg));
-  }
-  return messages;
 }
 
 // ================================
@@ -1090,4 +722,19 @@ function buildContextFromResults(results) {
   });
 
   return context;
+}
+
+/**
+ * クエリ拡張レスポンスをパース
+ */
+function parseExpansionResponse(response) {
+  try {
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+  } catch (e) {
+    // パース失敗
+  }
+  return { expansions: [] };
 }
