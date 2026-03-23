@@ -29,7 +29,21 @@ const MODULE_DEFINITIONS = {
       'cosineSimilarity', 'hashUserId', 'isDebugModeEnabled'
     ]
   },
-  
+
+  // ================================
+  //  プリプロセス（テキスト前処理・チャンク化）
+  // ================================
+  'preprocess': {
+    file: 'preprocess.js',
+    description: 'プリプロセス（テキスト前処理・チャンク化）モジュール',
+    dependsOn: ['config', 'chunk', 'embedding', 'rag_sheet', 'extract'],
+    exports: [
+      'restoreParagraphs', 'processTextForRag',
+      'processAndIndexWithParagraphRestoration',
+      'PARAGRAPH_CHUNK_CONFIG'
+    ]
+  },
+
   // ================================
   //  LLM（Large Language Model）呼び出し
   // ================================

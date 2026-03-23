@@ -8,10 +8,11 @@
  * - rerankResults: LLMを使用して検索結果をリランキング
  * - buildRerankPrompt: リランキング用プロンプト生成
  * - parseRerankResponse: LLMレスポンスからスコアをパース
- * - callChatGPTRerank: リランキング用ChatGPT API呼び出し
  * 
- * @depends config, chat_message
- * @exports rerankResults, callChatGPTRerank
+ * 注意：ChatGPT API呼び出しはllm.jsに分離されました
+ * 
+ * @depends config, llm
+ * @exports rerankResults
  */
 
 /**
@@ -112,47 +113,4 @@ function parseRerankResponse(response, maxDocs) {
   }
 
   return scores;
-}
-
-/**
- * リランキング用ChatGPT APIを呼び出し
- */
-function callChatGPTRerank(messages, temperature, model) {
-  try {
-    const payload = {
-      model: model || GPT_MODEL,
-      messages: messages,
-      temperature: temperature
-    };
-
-    logTrace("[RERANK:API] リクエスト送信中... モデル:", payload.model);
-
-    const response = UrlFetchApp.fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "post",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + OPENAI_API_KEY
-        },
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: false
-      }
-    );
-
-    const responseCode = response.getResponseCode();
-    const responseText = response.getContentText();
-
-    if (responseCode !== 200) {
-      logError("[RERANK:API] OpenAI API エラー: ステータスコード " + responseCode, responseText);
-      return "";
-    }
-
-    const json = JSON.parse(responseText);
-    return json.choices[0].message.content.trim();
-
-  } catch (error) {
-    logError("[RERANK:API] エラー:", error);
-    return "";
-  }
 }

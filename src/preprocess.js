@@ -1,5 +1,8 @@
 /**
- * 段落復元チャンク化モジュール
+ * プリプロセス（テキスト前処理・チャンク化）モジュール
+ * 
+ * @module preprocess
+ * @description OCR/PDF抽出結果から段落構造を復元し、意味のまとまりでチャンク化
  * 
  * OCR / PDF抽出結果から段落構造を復元し、意味のまとまりでチャンク化します。
  * 「見出しだけ」「単語だけ」のチャンクを防止し、1チャンク=1段落（または1セクション）を実現します。
@@ -14,6 +17,9 @@
  * - TextChunk には JSON ではなく「自然文の段落」を保存
  * - record フィールドは見出し階層を保持（オプション）
  * - Embedding は段落テキストに対して生成
+ * 
+ * @depends config, chunk, embedding, rag_sheet, extract
+ * @exports restoreParagraphs, processTextForRag, processAndIndexWithParagraphRestoration, PARAGRAPH_CHUNK_CONFIG
  */
 
 // ================================
