@@ -176,6 +176,16 @@
   </div>
 
   <script>
+    // ローディング表示
+    function showLoading(show) {
+      var overlay = document.getElementById('loadingOverlay');
+      if (show) {
+        overlay.classList.remove('hidden');
+      } else {
+        overlay.classList.add('hidden');
+      }
+    }
+
     let logs = [];
     let filteredLogs = [];
     let sortColumn = 'timestamp';

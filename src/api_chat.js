@@ -410,6 +410,7 @@ function handleAgentStart(request) {
  */
 function handleAgentContinue(request) {
   const clientSessionId = request.sessionId;
+  const userMessage = request.message; // オプション: 新しいメッセージが提供された場合
   
   if (!clientSessionId) {
     return { success: false, error: 'セッションIDがありません' };
@@ -420,13 +421,57 @@ function handleAgentContinue(request) {
   const trimmedHistory = history.slice(-10);
 
   const savedState = getAgentState(webSessionId);
+  
+  // エージェントの状態が見つからない場合の処理
   if (!savedState || !savedState.userMessage) {
-    return { success: false, error: 'エージェントの状態が見つかりません。再度開始してください。' };
+    logWarn('[chatAPI] エージェントの状態が見つかりません。再スタートを試みます - sessionId:', clientSessionId);
+    
+    // 会話履歴から最初のユーザーメッセージを取得を試みる
+    let restartMessage = userMessage;
+    if (!restartMessage || restartMessage.trim() === '') {
+      for (var i = 0; i < history.length; i++) {
+        if (history[i].role === 'user') {
+          restartMessage = history[i].content;
+          break;
+        }
+      }
+    }
+    
+    // それでもメッセージが見つからない場合はエラー
+    if (!restartMessage || restartMessage.trim() === '') {
+      return { success: false, error: 'エージェントの状態が見つかりません。会話を開始してください。' };
+    }
+    
+    // 新しい開始として処理
+    logInfo('[chatAPI] エージェントを再スタート - sessionId:', clientSessionId, 'message:', restartMessage.substring(0, 50));
+    
+    const agentResult = callChatGPTWithAgentIterative(restartMessage, trimmedHistory, webSessionId, {
+      continueIteration: false,
+      maxIterations: AGENT_MODE_CONFIG.MAX_ITERATIONS || 3
+    });
+
+    trimmedHistory.push({ role: 'assistant', content: agentResult.finalResponse });
+    saveHistory(webSessionId, trimmedHistory);
+
+    logInfo('[chatAPI] エージェント再スタート完了 - sessionId:', clientSessionId, 'isComplete:', agentResult.isComplete);
+
+    return {
+      success: true,
+      reply: agentResult.finalResponse,
+      thinkingInfo: agentResult.thinkingInfo,
+      iteration: agentResult.iteration,
+      maxIterations: agentResult.maxIterations,
+      isComplete: agentResult.isComplete,
+      needsMoreSearch: agentResult.needsMoreSearch,
+      sessionId: clientSessionId,
+      timestamp: new Date().toISOString(),
+      restarted: true // 再スタートフラグ
+    };
   }
 
-  const userMessage = savedState.userMessage;
+  const userMessageFromState = savedState.userMessage;
 
-  const agentResult = callChatGPTWithAgentIterative(userMessage, trimmedHistory, webSessionId, {
+  const agentResult = callChatGPTWithAgentIterative(userMessageFromState, trimmedHistory, webSessionId, {
     continueIteration: true,
     maxIterations: AGENT_MODE_CONFIG.MAX_ITERATIONS || 3
   });

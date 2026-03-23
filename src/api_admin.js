@@ -607,3 +607,263 @@ function importAllProperties(jsonString) {
     return { success: false, error: error.message };
   }
 }
+
+/**
+ * LLMパラメータを取得（settings.html用）
+ */
+function getLlmSettingsData() {
+  try {
+    const properties = {};
+    const keys = Object.keys(LLM_PARAM_DEFINITIONS);
+
+    for (const key of keys) {
+      let value = userProps.getProperty(key);
+      const def = LLM_PARAM_DEFINITIONS[key];
+
+      if (value === null || value === undefined || value === '') {
+        if (def.defaultValue !== undefined) {
+          value = def.defaultValue;
+          userProps.setProperty(key, value);
+        }
+      }
+
+      properties[key] = value || '';
+    }
+
+    return {
+      success: true,
+      properties: properties,
+      definitions: LLM_PARAM_DEFINITIONS
+    };
+  } catch (error) {
+    logError('[getLlmSettingsData] エラー:', error);
+    return {
+      success: false,
+      error: error.message,
+      properties: {},
+      definitions: LLM_PARAM_DEFINITIONS
+    };
+  }
+}
+
+/**
+ * LLMパラメータを更新
+ */
+function updateLlmParam(key, value) {
+  try {
+    if (!Object.keys(LLM_PARAM_DEFINITIONS).includes(key)) {
+      return { success: false, error: '許可されていないキー: ' + key };
+    }
+
+    userProps.setProperty(key, String(value));
+    logInfo('[updateLlmParam]', key, value);
+
+    return { success: true, key: key, value: value };
+  } catch (error) {
+    logError('[updateLlmParam] エラー:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * 検索設定を取得
+ */
+function getSearchSettingsData() {
+  try {
+    const properties = {};
+    const keys = Object.keys(SEARCH_PARAM_DEFINITIONS);
+
+    for (const key of keys) {
+      let value = userProps.getProperty(key);
+      const def = SEARCH_PARAM_DEFINITIONS[key];
+
+      if (value === null || value === undefined || value === '') {
+        if (def.defaultValue !== undefined) {
+          value = def.defaultValue;
+          userProps.setProperty(key, value);
+        }
+      }
+
+      properties[key] = value || '';
+    }
+
+    return {
+      success: true,
+      properties: properties,
+      definitions: SEARCH_PARAM_DEFINITIONS
+    };
+  } catch (error) {
+    logError('[getSearchSettingsData] エラー:', error);
+    return {
+      success: false,
+      error: error.message,
+      properties: {},
+      definitions: SEARCH_PARAM_DEFINITIONS
+    };
+  }
+}
+
+/**
+ * 検索パラメータを更新
+ */
+function updateSearchParam(key, value) {
+  try {
+    if (!Object.keys(SEARCH_PARAM_DEFINITIONS).includes(key)) {
+      return { success: false, error: '許可されていないキー: ' + key };
+    }
+
+    userProps.setProperty(key, String(value));
+    logInfo('[updateSearchParam]', key, value);
+
+    return { success: true, key: key, value: value };
+  } catch (error) {
+    logError('[updateSearchParam] エラー:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * プロンプトテンプレート設定を取得
+ */
+function getPromptTemplateSettings() {
+  try {
+    const settings = {};
+
+    for (const key of Object.keys(PROMPT_TEMPLATE_DEFINITIONS)) {
+      let value = scriptProps.getProperty(key);
+      const def = PROMPT_TEMPLATE_DEFINITIONS[key];
+
+      if (value === null || value === undefined || value === '') {
+        if (def.defaultValue !== undefined) {
+          value = def.defaultValue;
+          scriptProps.setProperty(key, value);
+        }
+      }
+
+      settings[key] = value || '';
+    }
+
+    return {
+      success: true,
+      settings: settings,
+      definitions: PROMPT_TEMPLATE_DEFINITIONS
+    };
+  } catch (error) {
+    logError('[getPromptTemplateSettings] エラー:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * プロンプトテンプレートを更新
+ */
+function updatePromptTemplate(key, value) {
+  try {
+    if (!Object.keys(PROMPT_TEMPLATE_DEFINITIONS).includes(key)) {
+      return { success: false, error: '許可されていないキー: ' + key };
+    }
+
+    scriptProps.setProperty(key, value);
+    logInfo('[updatePromptTemplate] プロンプトテンプレートを更新:', key);
+
+    return { success: true, key: key, value: value };
+  } catch (error) {
+    logError('[updatePromptTemplate] エラー:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * モデルがtop_kパラメータをサポートしているかチェック
+ * @param {string} model - モデル名
+ * @returns {boolean} サポートしている場合true
+ */
+function supportsTopK(model) {
+  return !MODELS_WITHOUT_TOP_K.includes(model);
+}
+
+/**
+ * LLMパラメータを取得（chat_message.js用）
+ * @returns {Object} LLMパラメータオブジェクト
+ */
+function getLlmParams() {
+  try {
+    const result = {};
+    for (const [key, def] of Object.entries(LLM_PARAM_DEFINITIONS)) {
+      let value = userProps.getProperty(key);
+      if (value === null || value === undefined || value === '') {
+        value = def.defaultValue;
+        userProps.setProperty(key, value);
+      }
+      const paramName = def.paramName || key;
+      result[paramName] = (def.isString || def.isSelect) ? value : (value === '' ? NaN : parseFloat(value));
+    }
+    return result;
+  } catch (error) {
+    logError('[getLlmParams] エラー:', error);
+    return getLlmParamsDefault();
+  }
+}
+
+/**
+ * LLMパラメータのデフォルト値を返す
+ * @returns {Object} デフォルトLLMパラメータ
+ */
+function getLlmParamsDefault() {
+  const d = {};
+  for (const [key, def] of Object.entries(LLM_PARAM_DEFINITIONS)) {
+    d[def.paramName] = (def.isString || def.isSelect) ? def.defaultValue : parseFloat(def.defaultValue);
+  }
+  return d;
+}
+
+/**
+ * 検索パラメータを取得（chat_message.js用）
+ * @returns {Object} 検索パラメータオブジェクト
+ */
+function getSearchParams() {
+  try {
+    const result = {};
+    for (const [key, def] of Object.entries(SEARCH_PARAM_DEFINITIONS)) {
+      let value = userProps.getProperty(key);
+      if (value === null || value === undefined || value === '') {
+        value = def.defaultValue;
+        userProps.setProperty(key, value);
+      }
+      result[key] = value !== 'false';
+    }
+    return result;
+  } catch (error) {
+    logError('[getSearchParams] エラー:', error);
+    return getSearchParamsDefault();
+  }
+}
+
+/**
+ * 検索パラメータのデフォルト値を返す
+ * @returns {Object} デフォルト検索パラメータ
+ */
+function getSearchParamsDefault() {
+  const d = {};
+  for (const [key, def] of Object.entries(SEARCH_PARAM_DEFINITIONS)) {
+    d[key] = def.defaultValue !== 'false';
+  }
+  return d;
+}
+
+/**
+ * 設定値の初期化（存在しないキーをデフォルト値で作成）
+ * @returns {Object} 初期化結果
+ */
+function initializeSettings() {
+  try {
+    return {
+      success: true,
+      message: '設定定義を返却しました',
+      definitions: SETTING_DEFINITIONS
+    };
+  } catch (error) {
+    logError('[initializeSettings] エラー:', error);
+    return { success: false, error: error.message };
+  }
+}
